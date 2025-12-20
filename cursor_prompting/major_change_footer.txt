@@ -1,0 +1,4 @@
+Before finalizing:
+1. Which files in /docs/architecture does this change comply with?
+2. Which module contract governs this code?
+3. Does this introduce any new inference or implicit guessing? If yes, stop.

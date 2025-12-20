@@ -1,0 +1,4 @@
+Architectural reminder:
+All changes must comply with /docs/architecture.
+Do not collapse stages or introduce new inference paths.
+Report conflicts instead of resolving them.
