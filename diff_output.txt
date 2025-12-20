@@ -1,0 +1,742 @@
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..8a64082
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,12 @@
++[project]
++name = "sq-parsing-hybrid"
++version = "0.0.0"
++description = "SnapQuote hybrid parsing pipeline modules (OCR/grouping/interpretation/validation)."
++requires-python = ">=3.11"
++
++[tool.setuptools]
++package-dir = {"" = "src"}
++
++[tool.setuptools.packages.find]
++where = ["src"]
++
+diff --git a/src/ocr/__init__.py b/src/ocr/__init__.py
+new file mode 100644
+index 0000000..fd0f801
+--- /dev/null
++++ b/src/ocr/__init__.py
+@@ -0,0 +1,36 @@
++"""
++OCR stage (perception only).
++
++Contract (docs/architecture/01_PIPELINE_DATA_FLOW.md):
++- Input: raw document image(s)
++- Output: token text, absolute bounding boxes, confidence scores, page number
++- Constraints: no correction, no merging, no inference; optional confidence floor
++
++Data access (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++- No environment variable reads in this module
++- No hardcoded paths
++- All filesystem access is via explicitly passed resolved data_root/config
++"""
++
++from .contracts import (
++    BBox,
++    OcrConfig,
++    OcrDocumentResult,
++    OcrEngineName,
++    OcrError,
++    OcrPageResult,
++    OcrToken,
++)
++from .module import run_ocr_on_image_relpath
++
++__all__ = [
++    "BBox",
++    "OcrConfig",
++    "OcrDocumentResult",
++    "OcrEngineName",
++    "OcrError",
++    "OcrPageResult",
++    "OcrToken",
++    "run_ocr_on_image_relpath",
++]
++
+diff --git a/src/ocr/artifacts.py b/src/ocr/artifacts.py
+new file mode 100644
+index 0000000..08ebd22
+--- /dev/null
++++ b/src/ocr/artifacts.py
+@@ -0,0 +1,29 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++from .contracts import OcrDocumentResult
++
++
++def serialize_ocr_result(result: OcrDocumentResult) -> str:
++    """
++    Stable JSON serialization for audit artifacts.
++    """
++
++    payload: dict[str, Any] = result.to_dict()
++    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
++
++
++def write_ocr_json_artifact(*, result: OcrDocumentResult, out_file: Path) -> None:
++    """
++    Write OCR output to a JSON artifact file (machine-readable, auditable).
++
++    Note: This helper does not assume any fixed artifact root. Callers provide
++    an explicit output path as part of their pipeline configuration.
++    """
++
++    out_file.parent.mkdir(parents=True, exist_ok=True)
++    out_file.write_text(serialize_ocr_result(result), encoding="utf-8")
++
+diff --git a/src/ocr/cli.py b/src/ocr/cli.py
+new file mode 100644
+index 0000000..107e7e7
+--- /dev/null
++++ b/src/ocr/cli.py
+@@ -0,0 +1,86 @@
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++from .artifacts import write_ocr_json_artifact
++from .contracts import OcrConfig
++from .module import run_ocr_on_image_relpath
++
++
++def build_arg_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="sq-ocr",
++        description=(
++            "OCR (perception only): emit token text + bounding boxes + confidences as JSON."
++        ),
++    )
++    p.add_argument(
++        "--data-root",
++        required=True,
++        type=Path,
++        help="Resolved DATA_ROOT path (must be passed explicitly; no env reads).",
++    )
++    p.add_argument(
++        "--image-relpath",
++        required=True,
++        help="Image path relative to --data-root.",
++    )
++    p.add_argument(
++        "--out",
++        required=True,
++        type=Path,
++        help="Output JSON artifact file path.",
++    )
++    p.add_argument(
++        "--confidence-floor",
++        type=float,
++        default=0.0,
++        help="Drop tokens with confidence below this threshold (0..1).",
++    )
++    p.add_argument(
++        "--language",
++        default="eng",
++        help="Tesseract language hint (default: eng).",
++    )
++    p.add_argument(
++        "--psm",
++        type=int,
++        default=None,
++        help="Tesseract page segmentation mode (optional).",
++    )
++    p.add_argument(
++        "--timeout-s",
++        type=float,
++        default=120.0,
++        help="Tesseract timeout in seconds.",
++    )
++    p.add_argument(
++        "--compute-source-sha256",
++        action="store_true",
++        help="Include SHA-256 of the source file in meta for auditing.",
++    )
++    return p
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_arg_parser().parse_args(argv)
++
++    config = OcrConfig(
++        data_root=args.data_root,
++        confidence_floor=args.confidence_floor,
++        language=args.language,
++        psm=args.psm,
++        timeout_s=args.timeout_s,
++        compute_source_sha256=args.compute_source_sha256,
++    )
++
++    result = run_ocr_on_image_relpath(config=config, image_relpath=args.image_relpath)
++    write_ocr_json_artifact(result=result, out_file=args.out)
++
++    return 0 if result.ok else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
+diff --git a/src/ocr/contracts.py b/src/ocr/contracts.py
+new file mode 100644
+index 0000000..7760faa
+--- /dev/null
++++ b/src/ocr/contracts.py
+@@ -0,0 +1,112 @@
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass
++from enum import Enum
++from pathlib import Path
++from typing import Any
++
++
++class OcrEngineName(str, Enum):
++    """
++    OCR backends supported by this module.
++
++    Note: The OCR module is *perception only*; the backend must not perform
++    post-correction / semantic filtering within this module.
++    """
++
++    TESSERACT_CLI = "tesseract_cli"
++
++
++@dataclass(frozen=True, slots=True)
++class BBox:
++    """
++    Absolute pixel coordinates (inclusive-exclusive):
++    - (x0, y0) is top-left
++    - (x1, y1) is bottom-right
++    """
++
++    x0: int
++    y0: int
++    x1: int
++    y1: int
++
++
++@dataclass(frozen=True, slots=True)
++class OcrToken:
++    """
++    Single OCR token hypothesis.
++
++    `text` must be exactly as recognized by the OCR engine (no correction).
++    """
++
++    token_id: str
++    page_num: int
++    text: str
++    bbox: BBox
++    confidence: float | None  # normalized 0..1 when available, else None
++    raw_confidence: float | None  # engine-native confidence when available
++
++
++@dataclass(frozen=True, slots=True)
++class OcrPageResult:
++    page_num: int
++    tokens: list[OcrToken]
++
++
++@dataclass(frozen=True, slots=True)
++class OcrError:
++    code: str
++    message: str
++    detail: dict[str, Any] | None = None
++
++
++@dataclass(frozen=True, slots=True)
++class OcrDocumentResult:
++    """
++    Machine-readable, auditable OCR output.
++
++    On failure, `ok` is False and pages will typically be empty. No content is
++    fabricated to "fill in" missing OCR results.
++    """
++
++    ok: bool
++    engine: OcrEngineName
++    source_image_relpath: str | None
++    pages: list[OcrPageResult]
++    errors: list[OcrError]
++    meta: dict[str, Any]
++
++    def to_dict(self) -> dict[str, Any]:
++        """
++        Stable JSON-serializable representation (dataclasses -> primitives).
++        """
++
++        return asdict(self)
++
++
++@dataclass(frozen=True, slots=True)
++class OcrConfig:
++    """
++    OCR module configuration.
++
++    Architectural constraint (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++    - `data_root` must be the resolved DATA_ROOT provided by application startup.
++    - This module must NOT read environment variables itself.
++    """
++
++    data_root: Path
++    engine: OcrEngineName = OcrEngineName.TESSERACT_CLI
++    confidence_floor: float = 0.0  # Allowed filter: contract permits confidence floor only.
++    language: str = "eng"  # engine hint only; not a semantic correction.
++    psm: int | None = None  # Tesseract page segmentation mode; if None, use default.
++    timeout_s: float = 120.0
++    compute_source_sha256: bool = False  # optional audit metadata
++
++    def __post_init__(self) -> None:
++        if self.confidence_floor < 0.0 or self.confidence_floor > 1.0:
++            raise ValueError("confidence_floor must be within [0.0, 1.0]")
++
++        # Ensure callers pass an actual Path; this module will resolve it for safe access.
++        if not isinstance(self.data_root, Path):
++            raise TypeError("data_root must be a pathlib.Path")
++
+diff --git a/src/ocr/data_access.py b/src/ocr/data_access.py
+new file mode 100644
+index 0000000..60155bd
+--- /dev/null
++++ b/src/ocr/data_access.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++import hashlib
++from pathlib import Path
++
++
++class DataAccessError(Exception):
++    pass
++
++
++def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
++    """
++    Resolve a relative path under an explicit, resolved data_root.
++
++    Architectural requirements (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++    - This module must not assume where data lives.
++    - This module must not read environment variables.
++    - All data access is rooted at the resolved data_root passed in explicitly.
++    """
++
++    if relpath.startswith(("/", "\\")) or (":" in relpath and "\\" in relpath):
++        # Absolute path / Windows drive patterns are not permitted as "relpath".
++        raise DataAccessError(f"Expected a relative path under data_root, got: {relpath!r}")
++
++    root = data_root.expanduser().resolve()
++    candidate = (root / relpath).resolve()
++
++    # Python 3.11 has Path.is_relative_to, but keep a robust fallback.
++    try:
++        ok = candidate.is_relative_to(root)
++    except AttributeError:  # pragma: no cover
++        root_str = str(root)
++        cand_str = str(candidate)
++        ok = cand_str == root_str or cand_str.startswith(root_str + "/")
++
++    if not ok:
++        raise DataAccessError(
++            f"Path traversal or external reference detected: relpath={relpath!r}"
++        )
++
++    return candidate
++
++
++def sha256_file(path: Path) -> str:
++    """
++    Compute SHA-256 of a file for audit metadata.
++
++    Note: reading the file is allowed because access is still mediated via
++    explicit data_root/path resolution by the caller.
++    """
++
++    h = hashlib.sha256()
++    with path.open("rb") as f:
++        for chunk in iter(lambda: f.read(1024 * 1024), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
+diff --git a/src/ocr/engines/__init__.py b/src/ocr/engines/__init__.py
+new file mode 100644
+index 0000000..fc184c7
+--- /dev/null
++++ b/src/ocr/engines/__init__.py
+@@ -0,0 +1,5 @@
++from .base import OcrEngine
++from .tesseract_cli import TesseractCliEngine
++
++__all__ = ["OcrEngine", "TesseractCliEngine"]
++
+diff --git a/src/ocr/engines/base.py b/src/ocr/engines/base.py
+new file mode 100644
+index 0000000..4eb5db1
+--- /dev/null
++++ b/src/ocr/engines/base.py
+@@ -0,0 +1,23 @@
++from __future__ import annotations
++
++from abc import ABC, abstractmethod
++from pathlib import Path
++
++from ..contracts import OcrConfig, OcrDocumentResult
++
++
++class OcrEngine(ABC):
++    """
++    Interface for OCR perception engines.
++
++    IMPORTANT:
++    - Engines must return literal text hypotheses, bounding boxes, confidences.
++    - Engines must NOT apply semantic correction/guessing/normalization.
++    """
++
++    @abstractmethod
++    def run_on_image_file(
++        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
++    ) -> OcrDocumentResult:
++        raise NotImplementedError
++
+diff --git a/src/ocr/engines/tesseract_cli.py b/src/ocr/engines/tesseract_cli.py
+new file mode 100644
+index 0000000..9c65bfa
+--- /dev/null
++++ b/src/ocr/engines/tesseract_cli.py
+@@ -0,0 +1,240 @@
++from __future__ import annotations
++
++import csv
++import subprocess
++from collections import defaultdict
++from pathlib import Path
++from typing import Any
++
++from ..contracts import (
++    BBox,
++    OcrConfig,
++    OcrDocumentResult,
++    OcrEngineName,
++    OcrError,
++    OcrPageResult,
++    OcrToken,
++)
++from .base import OcrEngine
++
++
++def _token_id(*, page_num: int, idx: int) -> str:
++    return f"p{page_num:03d}_t{idx:06d}"
++
++
++def _normalize_confidence(raw_conf: float | None) -> float | None:
++    if raw_conf is None:
++        return None
++    if raw_conf < 0:
++        return None
++    # Tesseract TSV is typically 0..100; clamp into [0, 1]
++    return max(0.0, min(1.0, raw_conf / 100.0))
++
++
++class TesseractCliEngine(OcrEngine):
++    """
++    Tesseract OCR via `tesseract` CLI, parsed from TSV output.
++
++    This engine performs no correction, no merging, and no semantic filtering.
++    Only an optional confidence floor is applied, per the Stage 1 contract.
++    """
++
++    def run_on_image_file(
++        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
++    ) -> OcrDocumentResult:
++        meta: dict[str, Any] = {
++            "backend": "tesseract",
++            "backend_mode": "cli",
++            "language": config.language,
++            "psm": config.psm,
++            "confidence_floor": config.confidence_floor,
++        }
++
++        if not image_file.exists():
++            detail: dict[str, Any] = {"source_image_relpath": source_relpath}
++            if source_relpath is None:
++                # Only include absolute path when the caller did not provide a relpath.
++                detail["image_file"] = str(image_file)
++            return OcrDocumentResult(
++                ok=False,
++                engine=OcrEngineName.TESSERACT_CLI,
++                source_image_relpath=source_relpath,
++                pages=[],
++                errors=[
++                    OcrError(
++                        code="OCR_INPUT_NOT_FOUND",
++                        message="Input image file not found",
++                        detail=detail,
++                    )
++                ],
++                meta=meta,
++            )
++
++        cmd = [
++            "tesseract",
++            str(image_file),
++            "stdout",
++            "-l",
++            config.language,
++        ]
++
++        if config.psm is not None:
++            cmd.extend(["--psm", str(config.psm)])
++
++        # Request TSV output (word-level rows will include bounding boxes + conf + text).
++        cmd.append("tsv")
++        # Keep artifacts stable/portable: do not embed absolute paths.
++        meta["command_template"] = ["tesseract", "<IMAGE_FILE>", *cmd[2:]]
++
++        try:
++            proc = subprocess.run(
++                cmd,
++                check=False,
++                capture_output=True,
++                text=True,
++                timeout=config.timeout_s,
++            )
++        except FileNotFoundError:
++            return OcrDocumentResult(
++                ok=False,
++                engine=OcrEngineName.TESSERACT_CLI,
++                source_image_relpath=source_relpath,
++                pages=[],
++                errors=[
++                    OcrError(
++                        code="OCR_BACKEND_NOT_INSTALLED",
++                        message="tesseract binary not found on PATH",
++                        detail={"expected_command": "tesseract"},
++                    )
++                ],
++                meta=meta,
++            )
++        except subprocess.TimeoutExpired:
++            return OcrDocumentResult(
++                ok=False,
++                engine=OcrEngineName.TESSERACT_CLI,
++                source_image_relpath=source_relpath,
++                pages=[],
++                errors=[
++                    OcrError(
++                        code="OCR_TIMEOUT",
++                        message="OCR backend timed out",
++                        detail={"timeout_s": config.timeout_s},
++                    )
++                ],
++                meta=meta,
++            )
++
++        if proc.returncode != 0:
++            return OcrDocumentResult(
++                ok=False,
++                engine=OcrEngineName.TESSERACT_CLI,
++                source_image_relpath=source_relpath,
++                pages=[],
++                errors=[
++                    OcrError(
++                        code="OCR_BACKEND_ERROR",
++                        message="OCR backend returned a non-zero exit code",
++                        detail={
++                            "returncode": proc.returncode,
++                            "stderr": proc.stderr[-4000:],  # truncate for artifact stability
++                        },
++                    )
++                ],
++                meta=meta,
++            )
++
++        tsv = proc.stdout
++        # Parse TSV into tokens; keep ordering deterministic by (page, block, par, line, word).
++        tokens_by_page: dict[int, list[tuple[tuple[int, int, int, int, int], OcrToken]]] = defaultdict(
++            list
++        )
++
++        reader = csv.DictReader(tsv.splitlines(), delimiter="\t")
++        seen_any_row = False
++        idx_by_page: dict[int, int] = defaultdict(int)
++
++        for row in reader:
++            seen_any_row = True
++
++            # Tesseract TSV includes multiple "levels". We only emit word-level tokens.
++            # level meanings: 1=page,2=block,3=para,4=line,5=word
++            try:
++                level = int(row.get("level", "") or "0")
++            except ValueError:
++                continue
++            if level != 5:
++                continue
++
++            text = row.get("text", "")
++            # Emit only actual text hypotheses; do not strip/normalize/correct.
++            if text == "":
++                continue
++
++            try:
++                page_num = int(row.get("page_num", "") or "1")
++                block_num = int(row.get("block_num", "") or "0")
++                par_num = int(row.get("par_num", "") or "0")
++                line_num = int(row.get("line_num", "") or "0")
++                word_num = int(row.get("word_num", "") or "0")
++
++                left = int(row.get("left", "") or "0")
++                top = int(row.get("top", "") or "0")
++                width = int(row.get("width", "") or "0")
++                height = int(row.get("height", "") or "0")
++            except ValueError:
++                # Malformed geometry rows are dropped (no guessing).
++                continue
++
++            raw_conf: float | None
++            conf_str = row.get("conf", "")
++            try:
++                raw_conf = float(conf_str) if conf_str != "" else None
++            except ValueError:
++                raw_conf = None
++
++            conf = _normalize_confidence(raw_conf)
++            if conf is not None and conf < config.confidence_floor:
++                continue
++
++            idx = idx_by_page[page_num]
++            idx_by_page[page_num] += 1
++
++            token = OcrToken(
++                token_id=_token_id(page_num=page_num, idx=idx),
++                page_num=page_num,
++                text=text,
++                bbox=BBox(x0=left, y0=top, x1=left + width, y1=top + height),
++                confidence=conf,
++                raw_confidence=raw_conf,
++            )
++
++            sort_key = (page_num, block_num, par_num, line_num, word_num)
++            tokens_by_page[page_num].append((sort_key, token))
++
++        if not seen_any_row:
++            # Backend succeeded but produced no parseable TSV rows; return empty success.
++            return OcrDocumentResult(
++                ok=True,
++                engine=OcrEngineName.TESSERACT_CLI,
++                source_image_relpath=source_relpath,
++                pages=[],
++                errors=[],
++                meta={**meta, "note": "No TSV rows parsed"},
++            )
++
++        pages: list[OcrPageResult] = []
++        for page_num in sorted(tokens_by_page.keys()):
++            # Sort tokens deterministically by structural order key.
++            page_tokens = [t for _, t in sorted(tokens_by_page[page_num], key=lambda x: x[0])]
++            pages.append(OcrPageResult(page_num=page_num, tokens=page_tokens))
++
++        return OcrDocumentResult(
++            ok=True,
++            engine=OcrEngineName.TESSERACT_CLI,
++            source_image_relpath=source_relpath,
++            pages=pages,
++            errors=[],
++            meta=meta,
++        )
++
+diff --git a/src/ocr/module.py b/src/ocr/module.py
+new file mode 100644
+index 0000000..2a98fed
+--- /dev/null
++++ b/src/ocr/module.py
+@@ -0,0 +1,82 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from .contracts import OcrConfig, OcrDocumentResult, OcrEngineName, OcrError
++from .data_access import DataAccessError, resolve_under_data_root, sha256_file
++from .engines.tesseract_cli import TesseractCliEngine
++
++
++def _get_engine(engine: OcrEngineName):
++    if engine == OcrEngineName.TESSERACT_CLI:
++        return TesseractCliEngine()
++    raise ValueError(f"Unsupported OCR engine: {engine}")
++
++
++def _attach_source_sha256_if_enabled(
++    *, config: OcrConfig, image_file: Path, result: OcrDocumentResult
++) -> OcrDocumentResult:
++    if not (config.compute_source_sha256 and image_file.exists()):
++        return result
++
++    try:
++        src_hash = sha256_file(image_file)
++        return OcrDocumentResult(
++            ok=result.ok,
++            engine=result.engine,
++            source_image_relpath=result.source_image_relpath,
++            pages=result.pages,
++            errors=result.errors,
++            meta={**result.meta, "source_sha256": src_hash},
++        )
++    except Exception:
++        # Do not fail OCR if hashing fails; add an explicit audit note.
++        return OcrDocumentResult(
++            ok=result.ok,
++            engine=result.engine,
++            source_image_relpath=result.source_image_relpath,
++            pages=result.pages,
++            errors=result.errors
++            + [
++                OcrError(
++                    code="OCR_AUDIT_HASH_FAILED",
++                    message="Failed to compute source SHA-256",
++                    detail={"source_image_relpath": result.source_image_relpath},
++                )
++            ],
++            meta=result.meta,
++        )
++
++
++def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDocumentResult:
++    """
++    Run OCR on an image referenced by a relative path under `config.data_root`.
++
++    This is the preferred interface for pipeline integration to comply with
++    /docs/architecture/07_DATA_RULES_AND_ACCESS.MD.
++    """
++
++    try:
++        image_file = resolve_under_data_root(data_root=config.data_root, relpath=image_relpath)
++    except DataAccessError as e:
++        return OcrDocumentResult(
++            ok=False,
++            engine=config.engine,
++            source_image_relpath=image_relpath,
++            pages=[],
++            errors=[
++                OcrError(
++                    code="OCR_DATA_ACCESS_ERROR",
++                    message=str(e),
++                    detail={"data_root": str(config.data_root), "relpath": image_relpath},
++                )
++            ],
++            meta={"confidence_floor": config.confidence_floor},
++        )
++
++    engine = _get_engine(config.engine)
++    result = engine.run_on_image_file(
++        config=config, image_file=image_file, source_relpath=image_relpath
++    )
++    return _attach_source_sha256_if_enabled(config=config, image_file=image_file, result=result)
++

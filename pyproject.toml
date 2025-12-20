@@ -1,0 +1,12 @@
+[project]
+name = "sq-parsing-hybrid"
+version = "0.0.0"
+description = "SnapQuote hybrid parsing pipeline modules (OCR/grouping/interpretation/validation)."
+requires-python = ">=3.11"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
