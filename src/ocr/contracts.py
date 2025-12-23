@@ -89,7 +89,7 @@ class OcrConfig:
     """
     OCR module configuration.
 
-    Architectural constraint (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
+    Architectural constraint (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
     - `data_root` must be the resolved DATA_ROOT provided by application startup.
     - This module must NOT read environment variables itself.
     """

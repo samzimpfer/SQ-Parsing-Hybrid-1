@@ -13,13 +13,17 @@ This system explicitly rejects end-to-end learned extraction.
 
 # Final Architecture (Non-Negotiable)
 The system must follow this pipeline:
+0. Document normalization (PDF -> deterministic page images)
 1. OCR as perception only
 2. Deterministic spatial grouping
 3. Local text-only LLM as constrained interpreter
-4. Schema-first nullable output
-5. Optional multi-pass self-consistency
+4. Optional multi-pass self-consistency
 
 No stage may collapse into another.
+
+Schema is authoritative; all outputs are schema-first with explicit nulls; evidence required for any non-null.
+
+Document numbering is authoritative. During early architecture stabilization, renumbering may occur to maintain coherence. Once Stage 0 and Stage 1 are implemented and validated, numbering is frozen and future additions must use the next available number.
 
 ---
 
@@ -30,6 +34,7 @@ The following are out of scope and forbidden:
 - YOLO or object detection as core parsing
 - OCR correction or semantic guessing
 - Probabilistic hallucination suppression
+- PDF handling outside of Stage 0.
 
 Any implementation using these approaches is invalid.
 

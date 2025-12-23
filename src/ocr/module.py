@@ -53,7 +53,7 @@ def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDoc
     Run OCR on an image referenced by a relative path under `config.data_root`.
 
     This is the preferred interface for pipeline integration to comply with
-    /docs/architecture/07_DATA_RULES_AND_ACCESS.MD.
+    /docs/architecture/08_DATA_RULES_AND_ACCESS.MD.
     """
 
     try:

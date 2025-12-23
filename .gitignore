@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+diff_output.txt
+artifacts/
+*.egg-info/

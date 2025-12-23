@@ -12,7 +12,7 @@ def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
     """
     Resolve a relative path under an explicit, resolved data_root.
 
-    Architectural requirements (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
+    Architectural requirements (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
     - This module must not assume where data lives.
     - This module must not read environment variables.
     - All data access is rooted at the resolved data_root passed in explicitly.

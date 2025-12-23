@@ -1,742 +1,1362 @@
-diff --git a/pyproject.toml b/pyproject.toml
+diff --git a/.cursor/rules/architectural-compliance-rule/RULE.md b/.cursor/rules/architectural-compliance-rule/RULE.md
+index d4f7b58..c4e31f1 100644
+--- a/.cursor/rules/architectural-compliance-rule/RULE.md
++++ b/.cursor/rules/architectural-compliance-rule/RULE.md
+@@ -4,19 +4,40 @@ alwaysApply: true
+ 
+ Architectural Compliance Rule
+ 
+-This codebase is governed by the documents in /docs/architecture.
++This codebase is governed by the documents in `/docs/architecture`.
++
++These documents are authoritative and binding. They define the system’s structure, invariants, and non-goals.
+ 
+ You must:
+-- Treat these documents as authoritative and binding
+-- Preserve strict separation between OCR, grouping, interpretation, and validation
+-- Prefer explicit nulls over inferred or guessed values
+-- Stop and report conflicts rather than resolving them implicitly
++- Treat all documents in /docs/architecture as strict architectural law
++- Preserve strict separation between pipeline stages:
++    - Stage 0: Document Normalization
++    - Stage 1: OCR (perception only)
++    - Stage 2: Structural grouping
++    - Stage 3: Semantic interpretation
++    - Stage 4: Validation / self-consistency
++- Prefer explicit nulls over inferred, guessed, or speculative values
++- Stop and report architectural conflicts rather than resolving them implicitly
++- Escalate when a change risks violating architectural boundaries
+ 
+ You must not:
+-- Collapse pipeline stages
++- Collapse or blur pipeline stages
+ - Introduce LLM-based parsing or perception
+-- Add OCR correction or guessing logic
+-- Reintroduce YOLO or VLM-centric extraction
++- Add OCR correction, guessing, or semantic interpretation logic
++- Reintroduce YOLO- or VLM-centric extraction approaches
++- Introduce implicit behavior based on file type or content
++
++PDF Handling (Explicit Restriction):
++- PDF handling is restricted exclusively to Stage 0 (Document Normalization)
++- OCR modules MUST reject non-image inputs
++- OCR modules MUST NOT accept, inspect, convert, or branch on PDF inputs
++- Introducing PDF logic, PDF detection, or PDF conversion into OCR is an architectural violation
++- Any attempt to “helpfully” add PDF support outside Stage 0 must be rejected and surfaced as a conflict
++
++If a request appears to violate these rules or the documents in /docs/architecture, you must:
++- Say so explicitly
++- Identify the violated constraint
++- Stop and wait for direction
+ 
+-If a request appears to violate these documents, you must say so explicitly and wait for direction.
++You are an implementer operating under architectural law, not a designer improvising solutions.
+ 
+diff --git a/.gitignore b/.gitignore
 new file mode 100644
-index 0000000..8a64082
+index 0000000..8fb7a20
 --- /dev/null
-+++ b/pyproject.toml
-@@ -0,0 +1,12 @@
-+[project]
-+name = "sq-parsing-hybrid"
-+version = "0.0.0"
-+description = "SnapQuote hybrid parsing pipeline modules (OCR/grouping/interpretation/validation)."
-+requires-python = ">=3.11"
++++ b/.gitignore
+@@ -0,0 +1,6 @@
++__pycache__/
++*.pyc
++.venv/
++diff_output.txt
++artifacts/
++*.egg-info/
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..e57b54a
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,108 @@
++## SQ-Parsing-Hybrid-1
 +
-+[tool.setuptools]
-+package-dir = {"" = "src"}
++Deterministic, auditable extraction pipeline for heterogeneous engineering drawings.
 +
-+[tool.setuptools.packages.find]
-+where = ["src"]
++This repo is governed by the architecture docs in `docs/architecture/` and follows a **strict staged pipeline**:
++- **Stage 0 - Document normalization (PDF -> images, deterministic, no OCR)**
++- **Stage 1 — OCR (perception only)**: detect text tokens + bounding boxes + confidence (no correction, no inference)
++- **Stage 2 — Structural grouping (deterministic)**: spatial clustering into regions (no semantic content interpretation)
++- **Stage 3 — Interpretation (text-only LLM)**: map provided evidence into a schema with explicit nulls (LLM never sees images)
++- **Stage 4 — Validation (optional)**: compare passes and null on disagreement
 +
++Only **Stage 1 (OCR)** is implemented here currently.
++
++---
++
++## Data access contract (important)
++
++Per `docs/architecture/08_DATA_RULES_AND_ACCESS.MD`:
++- Raw drawings are external to the repo.
++- The system must **not** assume their location.
++- **No module may hardcode paths or read environment variables directly.**
++- Application startup resolves `DATA_ROOT` once; the resolved value is then passed explicitly (parameter/config) to modules.
++
++The OCR module takes a `--data-root` path explicitly and loads images only via **relative paths under that root**.
++
++---
++
++## Supported document inputs
++- PDF (via Stage 0)
++- Raster images (PNG/JPEG/TIFF) directly
++
++OCR does not accept PDFs
++
++---
++
++## Running the pipeline
++
++### Current status
++
++Stage 0 (PDF normalization) is defined/spec'd but not yet implemented.
++
++The full pipeline is not wired end-to-end in this repo yet. For now, you can run **Stage 1 (OCR)** to generate an auditable JSON artifact that downstream stages will consume later.
++
++Stages 2–4 are not yet implemented.
++
++---
++
++## Run OCR (Stage 1)
++
++### Prerequisites
++
++- **Python 3.11+**
++- **Tesseract OCR** installed and accessible on `PATH`
++  - macOS (Homebrew):
++
++```bash
++brew install tesseract
++```
++
++### Install the package (editable)
++
++From the repo root:
++
++```bash
++python3 -m venv .venv
++source .venv/bin/activate
++python3 -m pip install -U pip
++python3 -m pip install -e .
++```
++
++### Run OCR and write a JSON artifact
++
++You must provide:
++- `--data-root`: resolved filesystem directory containing your drawings/images
++- `--image-relpath`: image path **relative to** `--data-root`
++- `--out`: where to write the OCR JSON artifact
++
++Example:
++
++```bash
++python3 -m ocr.cli \
++  --data-root "/absolute/path/to/your/DATA_ROOT" \
++  --image-relpath "drawings/example_page_1.png" \
++  --out "artifacts/ocr/example_page_1.ocr.json" \
++  --confidence-floor 0.0
++```
++
++Optional flags:
++- `--compute-source-sha256`: include SHA-256 of the source image in `meta` (audit aid)
++- `--psm <int>`: tesseract page segmentation mode hint
++- `--language <code>`: tesseract language hint (default `eng`)
++- `--timeout-s <seconds>`: backend timeout
++
++### Output format
++
++The OCR output is a stable, machine-readable JSON with:
++- `pages[]` → `tokens[]`
++- token fields include: `token_id`, `page_num`, `text` (literal), `bbox` (pixel coords), `confidence` (0–1 or null)
++- `errors[]` populated on failures; **no hallucinated content** is emitted
++
++---
++
++## Implementation notes (Stage 1 only)
++
++- OCR module code lives in `src/ocr/`
++- Primary API for pipeline integration: `ocr.module.run_ocr_on_image_relpath(config, image_relpath)`
++- Backend: `tesseract` CLI TSV parsing (no correction/normalization/semantic filtering; only optional confidence floor)
++
+diff --git a/diff_output.txt b/diff_output.txt
+deleted file mode 100644
+index 90cdc64..0000000
+--- a/diff_output.txt
++++ /dev/null
+@@ -1,742 +0,0 @@
+-diff --git a/pyproject.toml b/pyproject.toml
+-new file mode 100644
+-index 0000000..8a64082
+---- /dev/null
+-+++ b/pyproject.toml
+-@@ -0,0 +1,12 @@
+-+[project]
+-+name = "sq-parsing-hybrid"
+-+version = "0.0.0"
+-+description = "SnapQuote hybrid parsing pipeline modules (OCR/grouping/interpretation/validation)."
+-+requires-python = ">=3.11"
+-+
+-+[tool.setuptools]
+-+package-dir = {"" = "src"}
+-+
+-+[tool.setuptools.packages.find]
+-+where = ["src"]
+-+
+-diff --git a/src/ocr/__init__.py b/src/ocr/__init__.py
+-new file mode 100644
+-index 0000000..fd0f801
+---- /dev/null
+-+++ b/src/ocr/__init__.py
+-@@ -0,0 +1,36 @@
+-+"""
+-+OCR stage (perception only).
+-+
+-+Contract (docs/architecture/01_PIPELINE_DATA_FLOW.md):
+-+- Input: raw document image(s)
+-+- Output: token text, absolute bounding boxes, confidence scores, page number
+-+- Constraints: no correction, no merging, no inference; optional confidence floor
+-+
+-+Data access (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
+-+- No environment variable reads in this module
+-+- No hardcoded paths
+-+- All filesystem access is via explicitly passed resolved data_root/config
+-+"""
+-+
+-+from .contracts import (
+-+    BBox,
+-+    OcrConfig,
+-+    OcrDocumentResult,
+-+    OcrEngineName,
+-+    OcrError,
+-+    OcrPageResult,
+-+    OcrToken,
+-+)
+-+from .module import run_ocr_on_image_relpath
+-+
+-+__all__ = [
+-+    "BBox",
+-+    "OcrConfig",
+-+    "OcrDocumentResult",
+-+    "OcrEngineName",
+-+    "OcrError",
+-+    "OcrPageResult",
+-+    "OcrToken",
+-+    "run_ocr_on_image_relpath",
+-+]
+-+
+-diff --git a/src/ocr/artifacts.py b/src/ocr/artifacts.py
+-new file mode 100644
+-index 0000000..08ebd22
+---- /dev/null
+-+++ b/src/ocr/artifacts.py
+-@@ -0,0 +1,29 @@
+-+from __future__ import annotations
+-+
+-+import json
+-+from pathlib import Path
+-+from typing import Any
+-+
+-+from .contracts import OcrDocumentResult
+-+
+-+
+-+def serialize_ocr_result(result: OcrDocumentResult) -> str:
+-+    """
+-+    Stable JSON serialization for audit artifacts.
+-+    """
+-+
+-+    payload: dict[str, Any] = result.to_dict()
+-+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+-+
+-+
+-+def write_ocr_json_artifact(*, result: OcrDocumentResult, out_file: Path) -> None:
+-+    """
+-+    Write OCR output to a JSON artifact file (machine-readable, auditable).
+-+
+-+    Note: This helper does not assume any fixed artifact root. Callers provide
+-+    an explicit output path as part of their pipeline configuration.
+-+    """
+-+
+-+    out_file.parent.mkdir(parents=True, exist_ok=True)
+-+    out_file.write_text(serialize_ocr_result(result), encoding="utf-8")
+-+
+-diff --git a/src/ocr/cli.py b/src/ocr/cli.py
+-new file mode 100644
+-index 0000000..107e7e7
+---- /dev/null
+-+++ b/src/ocr/cli.py
+-@@ -0,0 +1,86 @@
+-+from __future__ import annotations
+-+
+-+import argparse
+-+from pathlib import Path
+-+
+-+from .artifacts import write_ocr_json_artifact
+-+from .contracts import OcrConfig
+-+from .module import run_ocr_on_image_relpath
+-+
+-+
+-+def build_arg_parser() -> argparse.ArgumentParser:
+-+    p = argparse.ArgumentParser(
+-+        prog="sq-ocr",
+-+        description=(
+-+            "OCR (perception only): emit token text + bounding boxes + confidences as JSON."
+-+        ),
+-+    )
+-+    p.add_argument(
+-+        "--data-root",
+-+        required=True,
+-+        type=Path,
+-+        help="Resolved DATA_ROOT path (must be passed explicitly; no env reads).",
+-+    )
+-+    p.add_argument(
+-+        "--image-relpath",
+-+        required=True,
+-+        help="Image path relative to --data-root.",
+-+    )
+-+    p.add_argument(
+-+        "--out",
+-+        required=True,
+-+        type=Path,
+-+        help="Output JSON artifact file path.",
+-+    )
+-+    p.add_argument(
+-+        "--confidence-floor",
+-+        type=float,
+-+        default=0.0,
+-+        help="Drop tokens with confidence below this threshold (0..1).",
+-+    )
+-+    p.add_argument(
+-+        "--language",
+-+        default="eng",
+-+        help="Tesseract language hint (default: eng).",
+-+    )
+-+    p.add_argument(
+-+        "--psm",
+-+        type=int,
+-+        default=None,
+-+        help="Tesseract page segmentation mode (optional).",
+-+    )
+-+    p.add_argument(
+-+        "--timeout-s",
+-+        type=float,
+-+        default=120.0,
+-+        help="Tesseract timeout in seconds.",
+-+    )
+-+    p.add_argument(
+-+        "--compute-source-sha256",
+-+        action="store_true",
+-+        help="Include SHA-256 of the source file in meta for auditing.",
+-+    )
+-+    return p
+-+
+-+
+-+def main(argv: list[str] | None = None) -> int:
+-+    args = build_arg_parser().parse_args(argv)
+-+
+-+    config = OcrConfig(
+-+        data_root=args.data_root,
+-+        confidence_floor=args.confidence_floor,
+-+        language=args.language,
+-+        psm=args.psm,
+-+        timeout_s=args.timeout_s,
+-+        compute_source_sha256=args.compute_source_sha256,
+-+    )
+-+
+-+    result = run_ocr_on_image_relpath(config=config, image_relpath=args.image_relpath)
+-+    write_ocr_json_artifact(result=result, out_file=args.out)
+-+
+-+    return 0 if result.ok else 2
+-+
+-+
+-+if __name__ == "__main__":
+-+    raise SystemExit(main())
+-+
+-diff --git a/src/ocr/contracts.py b/src/ocr/contracts.py
+-new file mode 100644
+-index 0000000..7760faa
+---- /dev/null
+-+++ b/src/ocr/contracts.py
+-@@ -0,0 +1,112 @@
+-+from __future__ import annotations
+-+
+-+from dataclasses import asdict, dataclass
+-+from enum import Enum
+-+from pathlib import Path
+-+from typing import Any
+-+
+-+
+-+class OcrEngineName(str, Enum):
+-+    """
+-+    OCR backends supported by this module.
+-+
+-+    Note: The OCR module is *perception only*; the backend must not perform
+-+    post-correction / semantic filtering within this module.
+-+    """
+-+
+-+    TESSERACT_CLI = "tesseract_cli"
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class BBox:
+-+    """
+-+    Absolute pixel coordinates (inclusive-exclusive):
+-+    - (x0, y0) is top-left
+-+    - (x1, y1) is bottom-right
+-+    """
+-+
+-+    x0: int
+-+    y0: int
+-+    x1: int
+-+    y1: int
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class OcrToken:
+-+    """
+-+    Single OCR token hypothesis.
+-+
+-+    `text` must be exactly as recognized by the OCR engine (no correction).
+-+    """
+-+
+-+    token_id: str
+-+    page_num: int
+-+    text: str
+-+    bbox: BBox
+-+    confidence: float | None  # normalized 0..1 when available, else None
+-+    raw_confidence: float | None  # engine-native confidence when available
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class OcrPageResult:
+-+    page_num: int
+-+    tokens: list[OcrToken]
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class OcrError:
+-+    code: str
+-+    message: str
+-+    detail: dict[str, Any] | None = None
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class OcrDocumentResult:
+-+    """
+-+    Machine-readable, auditable OCR output.
+-+
+-+    On failure, `ok` is False and pages will typically be empty. No content is
+-+    fabricated to "fill in" missing OCR results.
+-+    """
+-+
+-+    ok: bool
+-+    engine: OcrEngineName
+-+    source_image_relpath: str | None
+-+    pages: list[OcrPageResult]
+-+    errors: list[OcrError]
+-+    meta: dict[str, Any]
+-+
+-+    def to_dict(self) -> dict[str, Any]:
+-+        """
+-+        Stable JSON-serializable representation (dataclasses -> primitives).
+-+        """
+-+
+-+        return asdict(self)
+-+
+-+
+-+@dataclass(frozen=True, slots=True)
+-+class OcrConfig:
+-+    """
+-+    OCR module configuration.
+-+
+-+    Architectural constraint (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
+-+    - `data_root` must be the resolved DATA_ROOT provided by application startup.
+-+    - This module must NOT read environment variables itself.
+-+    """
+-+
+-+    data_root: Path
+-+    engine: OcrEngineName = OcrEngineName.TESSERACT_CLI
+-+    confidence_floor: float = 0.0  # Allowed filter: contract permits confidence floor only.
+-+    language: str = "eng"  # engine hint only; not a semantic correction.
+-+    psm: int | None = None  # Tesseract page segmentation mode; if None, use default.
+-+    timeout_s: float = 120.0
+-+    compute_source_sha256: bool = False  # optional audit metadata
+-+
+-+    def __post_init__(self) -> None:
+-+        if self.confidence_floor < 0.0 or self.confidence_floor > 1.0:
+-+            raise ValueError("confidence_floor must be within [0.0, 1.0]")
+-+
+-+        # Ensure callers pass an actual Path; this module will resolve it for safe access.
+-+        if not isinstance(self.data_root, Path):
+-+            raise TypeError("data_root must be a pathlib.Path")
+-+
+-diff --git a/src/ocr/data_access.py b/src/ocr/data_access.py
+-new file mode 100644
+-index 0000000..60155bd
+---- /dev/null
+-+++ b/src/ocr/data_access.py
+-@@ -0,0 +1,57 @@
+-+from __future__ import annotations
+-+
+-+import hashlib
+-+from pathlib import Path
+-+
+-+
+-+class DataAccessError(Exception):
+-+    pass
+-+
+-+
+-+def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
+-+    """
+-+    Resolve a relative path under an explicit, resolved data_root.
+-+
+-+    Architectural requirements (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
+-+    - This module must not assume where data lives.
+-+    - This module must not read environment variables.
+-+    - All data access is rooted at the resolved data_root passed in explicitly.
+-+    """
+-+
+-+    if relpath.startswith(("/", "\\")) or (":" in relpath and "\\" in relpath):
+-+        # Absolute path / Windows drive patterns are not permitted as "relpath".
+-+        raise DataAccessError(f"Expected a relative path under data_root, got: {relpath!r}")
+-+
+-+    root = data_root.expanduser().resolve()
+-+    candidate = (root / relpath).resolve()
+-+
+-+    # Python 3.11 has Path.is_relative_to, but keep a robust fallback.
+-+    try:
+-+        ok = candidate.is_relative_to(root)
+-+    except AttributeError:  # pragma: no cover
+-+        root_str = str(root)
+-+        cand_str = str(candidate)
+-+        ok = cand_str == root_str or cand_str.startswith(root_str + "/")
+-+
+-+    if not ok:
+-+        raise DataAccessError(
+-+            f"Path traversal or external reference detected: relpath={relpath!r}"
+-+        )
+-+
+-+    return candidate
+-+
+-+
+-+def sha256_file(path: Path) -> str:
+-+    """
+-+    Compute SHA-256 of a file for audit metadata.
+-+
+-+    Note: reading the file is allowed because access is still mediated via
+-+    explicit data_root/path resolution by the caller.
+-+    """
+-+
+-+    h = hashlib.sha256()
+-+    with path.open("rb") as f:
+-+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+-+            h.update(chunk)
+-+    return h.hexdigest()
+-+
+-diff --git a/src/ocr/engines/__init__.py b/src/ocr/engines/__init__.py
+-new file mode 100644
+-index 0000000..fc184c7
+---- /dev/null
+-+++ b/src/ocr/engines/__init__.py
+-@@ -0,0 +1,5 @@
+-+from .base import OcrEngine
+-+from .tesseract_cli import TesseractCliEngine
+-+
+-+__all__ = ["OcrEngine", "TesseractCliEngine"]
+-+
+-diff --git a/src/ocr/engines/base.py b/src/ocr/engines/base.py
+-new file mode 100644
+-index 0000000..4eb5db1
+---- /dev/null
+-+++ b/src/ocr/engines/base.py
+-@@ -0,0 +1,23 @@
+-+from __future__ import annotations
+-+
+-+from abc import ABC, abstractmethod
+-+from pathlib import Path
+-+
+-+from ..contracts import OcrConfig, OcrDocumentResult
+-+
+-+
+-+class OcrEngine(ABC):
+-+    """
+-+    Interface for OCR perception engines.
+-+
+-+    IMPORTANT:
+-+    - Engines must return literal text hypotheses, bounding boxes, confidences.
+-+    - Engines must NOT apply semantic correction/guessing/normalization.
+-+    """
+-+
+-+    @abstractmethod
+-+    def run_on_image_file(
+-+        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
+-+    ) -> OcrDocumentResult:
+-+        raise NotImplementedError
+-+
+-diff --git a/src/ocr/engines/tesseract_cli.py b/src/ocr/engines/tesseract_cli.py
+-new file mode 100644
+-index 0000000..9c65bfa
+---- /dev/null
+-+++ b/src/ocr/engines/tesseract_cli.py
+-@@ -0,0 +1,240 @@
+-+from __future__ import annotations
+-+
+-+import csv
+-+import subprocess
+-+from collections import defaultdict
+-+from pathlib import Path
+-+from typing import Any
+-+
+-+from ..contracts import (
+-+    BBox,
+-+    OcrConfig,
+-+    OcrDocumentResult,
+-+    OcrEngineName,
+-+    OcrError,
+-+    OcrPageResult,
+-+    OcrToken,
+-+)
+-+from .base import OcrEngine
+-+
+-+
+-+def _token_id(*, page_num: int, idx: int) -> str:
+-+    return f"p{page_num:03d}_t{idx:06d}"
+-+
+-+
+-+def _normalize_confidence(raw_conf: float | None) -> float | None:
+-+    if raw_conf is None:
+-+        return None
+-+    if raw_conf < 0:
+-+        return None
+-+    # Tesseract TSV is typically 0..100; clamp into [0, 1]
+-+    return max(0.0, min(1.0, raw_conf / 100.0))
+-+
+-+
+-+class TesseractCliEngine(OcrEngine):
+-+    """
+-+    Tesseract OCR via `tesseract` CLI, parsed from TSV output.
+-+
+-+    This engine performs no correction, no merging, and no semantic filtering.
+-+    Only an optional confidence floor is applied, per the Stage 1 contract.
+-+    """
+-+
+-+    def run_on_image_file(
+-+        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
+-+    ) -> OcrDocumentResult:
+-+        meta: dict[str, Any] = {
+-+            "backend": "tesseract",
+-+            "backend_mode": "cli",
+-+            "language": config.language,
+-+            "psm": config.psm,
+-+            "confidence_floor": config.confidence_floor,
+-+        }
+-+
+-+        if not image_file.exists():
+-+            detail: dict[str, Any] = {"source_image_relpath": source_relpath}
+-+            if source_relpath is None:
+-+                # Only include absolute path when the caller did not provide a relpath.
+-+                detail["image_file"] = str(image_file)
+-+            return OcrDocumentResult(
+-+                ok=False,
+-+                engine=OcrEngineName.TESSERACT_CLI,
+-+                source_image_relpath=source_relpath,
+-+                pages=[],
+-+                errors=[
+-+                    OcrError(
+-+                        code="OCR_INPUT_NOT_FOUND",
+-+                        message="Input image file not found",
+-+                        detail=detail,
+-+                    )
+-+                ],
+-+                meta=meta,
+-+            )
+-+
+-+        cmd = [
+-+            "tesseract",
+-+            str(image_file),
+-+            "stdout",
+-+            "-l",
+-+            config.language,
+-+        ]
+-+
+-+        if config.psm is not None:
+-+            cmd.extend(["--psm", str(config.psm)])
+-+
+-+        # Request TSV output (word-level rows will include bounding boxes + conf + text).
+-+        cmd.append("tsv")
+-+        # Keep artifacts stable/portable: do not embed absolute paths.
+-+        meta["command_template"] = ["tesseract", "<IMAGE_FILE>", *cmd[2:]]
+-+
+-+        try:
+-+            proc = subprocess.run(
+-+                cmd,
+-+                check=False,
+-+                capture_output=True,
+-+                text=True,
+-+                timeout=config.timeout_s,
+-+            )
+-+        except FileNotFoundError:
+-+            return OcrDocumentResult(
+-+                ok=False,
+-+                engine=OcrEngineName.TESSERACT_CLI,
+-+                source_image_relpath=source_relpath,
+-+                pages=[],
+-+                errors=[
+-+                    OcrError(
+-+                        code="OCR_BACKEND_NOT_INSTALLED",
+-+                        message="tesseract binary not found on PATH",
+-+                        detail={"expected_command": "tesseract"},
+-+                    )
+-+                ],
+-+                meta=meta,
+-+            )
+-+        except subprocess.TimeoutExpired:
+-+            return OcrDocumentResult(
+-+                ok=False,
+-+                engine=OcrEngineName.TESSERACT_CLI,
+-+                source_image_relpath=source_relpath,
+-+                pages=[],
+-+                errors=[
+-+                    OcrError(
+-+                        code="OCR_TIMEOUT",
+-+                        message="OCR backend timed out",
+-+                        detail={"timeout_s": config.timeout_s},
+-+                    )
+-+                ],
+-+                meta=meta,
+-+            )
+-+
+-+        if proc.returncode != 0:
+-+            return OcrDocumentResult(
+-+                ok=False,
+-+                engine=OcrEngineName.TESSERACT_CLI,
+-+                source_image_relpath=source_relpath,
+-+                pages=[],
+-+                errors=[
+-+                    OcrError(
+-+                        code="OCR_BACKEND_ERROR",
+-+                        message="OCR backend returned a non-zero exit code",
+-+                        detail={
+-+                            "returncode": proc.returncode,
+-+                            "stderr": proc.stderr[-4000:],  # truncate for artifact stability
+-+                        },
+-+                    )
+-+                ],
+-+                meta=meta,
+-+            )
+-+
+-+        tsv = proc.stdout
+-+        # Parse TSV into tokens; keep ordering deterministic by (page, block, par, line, word).
+-+        tokens_by_page: dict[int, list[tuple[tuple[int, int, int, int, int], OcrToken]]] = defaultdict(
+-+            list
+-+        )
+-+
+-+        reader = csv.DictReader(tsv.splitlines(), delimiter="\t")
+-+        seen_any_row = False
+-+        idx_by_page: dict[int, int] = defaultdict(int)
+-+
+-+        for row in reader:
+-+            seen_any_row = True
+-+
+-+            # Tesseract TSV includes multiple "levels". We only emit word-level tokens.
+-+            # level meanings: 1=page,2=block,3=para,4=line,5=word
+-+            try:
+-+                level = int(row.get("level", "") or "0")
+-+            except ValueError:
+-+                continue
+-+            if level != 5:
+-+                continue
+-+
+-+            text = row.get("text", "")
+-+            # Emit only actual text hypotheses; do not strip/normalize/correct.
+-+            if text == "":
+-+                continue
+-+
+-+            try:
+-+                page_num = int(row.get("page_num", "") or "1")
+-+                block_num = int(row.get("block_num", "") or "0")
+-+                par_num = int(row.get("par_num", "") or "0")
+-+                line_num = int(row.get("line_num", "") or "0")
+-+                word_num = int(row.get("word_num", "") or "0")
+-+
+-+                left = int(row.get("left", "") or "0")
+-+                top = int(row.get("top", "") or "0")
+-+                width = int(row.get("width", "") or "0")
+-+                height = int(row.get("height", "") or "0")
+-+            except ValueError:
+-+                # Malformed geometry rows are dropped (no guessing).
+-+                continue
+-+
+-+            raw_conf: float | None
+-+            conf_str = row.get("conf", "")
+-+            try:
+-+                raw_conf = float(conf_str) if conf_str != "" else None
+-+            except ValueError:
+-+                raw_conf = None
+-+
+-+            conf = _normalize_confidence(raw_conf)
+-+            if conf is not None and conf < config.confidence_floor:
+-+                continue
+-+
+-+            idx = idx_by_page[page_num]
+-+            idx_by_page[page_num] += 1
+-+
+-+            token = OcrToken(
+-+                token_id=_token_id(page_num=page_num, idx=idx),
+-+                page_num=page_num,
+-+                text=text,
+-+                bbox=BBox(x0=left, y0=top, x1=left + width, y1=top + height),
+-+                confidence=conf,
+-+                raw_confidence=raw_conf,
+-+            )
+-+
+-+            sort_key = (page_num, block_num, par_num, line_num, word_num)
+-+            tokens_by_page[page_num].append((sort_key, token))
+-+
+-+        if not seen_any_row:
+-+            # Backend succeeded but produced no parseable TSV rows; return empty success.
+-+            return OcrDocumentResult(
+-+                ok=True,
+-+                engine=OcrEngineName.TESSERACT_CLI,
+-+                source_image_relpath=source_relpath,
+-+                pages=[],
+-+                errors=[],
+-+                meta={**meta, "note": "No TSV rows parsed"},
+-+            )
+-+
+-+        pages: list[OcrPageResult] = []
+-+        for page_num in sorted(tokens_by_page.keys()):
+-+            # Sort tokens deterministically by structural order key.
+-+            page_tokens = [t for _, t in sorted(tokens_by_page[page_num], key=lambda x: x[0])]
+-+            pages.append(OcrPageResult(page_num=page_num, tokens=page_tokens))
+-+
+-+        return OcrDocumentResult(
+-+            ok=True,
+-+            engine=OcrEngineName.TESSERACT_CLI,
+-+            source_image_relpath=source_relpath,
+-+            pages=pages,
+-+            errors=[],
+-+            meta=meta,
+-+        )
+-+
+-diff --git a/src/ocr/module.py b/src/ocr/module.py
+-new file mode 100644
+-index 0000000..2a98fed
+---- /dev/null
+-+++ b/src/ocr/module.py
+-@@ -0,0 +1,82 @@
+-+from __future__ import annotations
+-+
+-+from pathlib import Path
+-+
+-+from .contracts import OcrConfig, OcrDocumentResult, OcrEngineName, OcrError
+-+from .data_access import DataAccessError, resolve_under_data_root, sha256_file
+-+from .engines.tesseract_cli import TesseractCliEngine
+-+
+-+
+-+def _get_engine(engine: OcrEngineName):
+-+    if engine == OcrEngineName.TESSERACT_CLI:
+-+        return TesseractCliEngine()
+-+    raise ValueError(f"Unsupported OCR engine: {engine}")
+-+
+-+
+-+def _attach_source_sha256_if_enabled(
+-+    *, config: OcrConfig, image_file: Path, result: OcrDocumentResult
+-+) -> OcrDocumentResult:
+-+    if not (config.compute_source_sha256 and image_file.exists()):
+-+        return result
+-+
+-+    try:
+-+        src_hash = sha256_file(image_file)
+-+        return OcrDocumentResult(
+-+            ok=result.ok,
+-+            engine=result.engine,
+-+            source_image_relpath=result.source_image_relpath,
+-+            pages=result.pages,
+-+            errors=result.errors,
+-+            meta={**result.meta, "source_sha256": src_hash},
+-+        )
+-+    except Exception:
+-+        # Do not fail OCR if hashing fails; add an explicit audit note.
+-+        return OcrDocumentResult(
+-+            ok=result.ok,
+-+            engine=result.engine,
+-+            source_image_relpath=result.source_image_relpath,
+-+            pages=result.pages,
+-+            errors=result.errors
+-+            + [
+-+                OcrError(
+-+                    code="OCR_AUDIT_HASH_FAILED",
+-+                    message="Failed to compute source SHA-256",
+-+                    detail={"source_image_relpath": result.source_image_relpath},
+-+                )
+-+            ],
+-+            meta=result.meta,
+-+        )
+-+
+-+
+-+def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDocumentResult:
+-+    """
+-+    Run OCR on an image referenced by a relative path under `config.data_root`.
+-+
+-+    This is the preferred interface for pipeline integration to comply with
+-+    /docs/architecture/07_DATA_RULES_AND_ACCESS.MD.
+-+    """
+-+
+-+    try:
+-+        image_file = resolve_under_data_root(data_root=config.data_root, relpath=image_relpath)
+-+    except DataAccessError as e:
+-+        return OcrDocumentResult(
+-+            ok=False,
+-+            engine=config.engine,
+-+            source_image_relpath=image_relpath,
+-+            pages=[],
+-+            errors=[
+-+                OcrError(
+-+                    code="OCR_DATA_ACCESS_ERROR",
+-+                    message=str(e),
+-+                    detail={"data_root": str(config.data_root), "relpath": image_relpath},
+-+                )
+-+            ],
+-+            meta={"confidence_floor": config.confidence_floor},
+-+        )
+-+
+-+    engine = _get_engine(config.engine)
+-+    result = engine.run_on_image_file(
+-+        config=config, image_file=image_file, source_relpath=image_relpath
+-+    )
+-+    return _attach_source_sha256_if_enabled(config=config, image_file=image_file, result=result)
+-+
+diff --git a/docs/architecture/00_DOCUMENT_NORMALIZATION.md b/docs/architecture/00_DOCUMENT_NORMALIZATION.md
+new file mode 100644
+index 0000000..4040753
+--- /dev/null
++++ b/docs/architecture/00_DOCUMENT_NORMALIZATION.md
+@@ -0,0 +1,27 @@
++# Stage name:
++**Stage 0 — Document Normalization**
++
++### Inputs:
++- PDF documents (relpath under DATA_ROOT)
++- No images, no OCR tokens
++
++### Outputs:
++- Raster image files (one per page)
++- Deterministic naming scheme
++- Explicit page ordering metadata
++
++### Explicit prohibitions:
++- No OCR
++- No text extraction
++- No semantic interpretation
++- No layout inference
++- No content filtering
++
++### Invariants:
++- Deterministic rendering parameters (DPI, color mode)
++- One output image == one PDF page
++- Page index preserved exactly
++
++### Downstream contract:
++- Output images are valid direct inputs to Stage 1 (OCR)
++- OCR sees images only, never PDFs
+diff --git a/docs/architecture/00_ARCHITECTURE_OVERVIEW.md b/docs/architecture/01_ARCHITECTURE_OVERVIEW.md
+similarity index 67%
+rename from docs/architecture/00_ARCHITECTURE_OVERVIEW.md
+rename to docs/architecture/01_ARCHITECTURE_OVERVIEW.md
+index fab47c3..55a8465 100644
+--- a/docs/architecture/00_ARCHITECTURE_OVERVIEW.md
++++ b/docs/architecture/01_ARCHITECTURE_OVERVIEW.md
+@@ -13,14 +13,18 @@ This system explicitly rejects end-to-end learned extraction.
+ 
+ # Final Architecture (Non-Negotiable)
+ The system must follow this pipeline:
++0. Document normalization (PDF -> deterministic page images)
+ 1. OCR as perception only
+ 2. Deterministic spatial grouping
+ 3. Local text-only LLM as constrained interpreter
+-4. Schema-first nullable output
+-5. Optional multi-pass self-consistency
++4. Optional multi-pass self-consistency
+ 
+ No stage may collapse into another.
+ 
++Schema is authoritative; all outputs are schema-first with explicit nulls; evidence required for any non-null.
++
++Document numbering is authoritative. During early architecture stabilization, renumbering may occur to maintain coherence. Once Stage 0 and Stage 1 are implemented and validated, numbering is frozen and future additions must use the next available number.
++
+ ---
+ 
+ # Explicitly Rejected Approaches
+@@ -30,6 +34,7 @@ The following are out of scope and forbidden:
+ - YOLO or object detection as core parsing
+ - OCR correction or semantic guessing
+ - Probabilistic hallucination suppression
++- PDF handling outside of Stage 0.
+ 
+ Any implementation using these approaches is invalid.
+ 
+@@ -40,4 +45,4 @@ Any implementation using these approaches is invalid.
+ - Grouping is structural, not semantic
+ - LLMs judge evidence, not pixels
+ - Absence of evidence → null
+-- Confidence comes from structure, not model belief
+\ No newline at end of file
++- Confidence comes from structure, not model belief
+diff --git a/docs/architecture/01_PIPELINE_DATA_FLOW.md b/docs/architecture/01_PIPELINE_DATA_FLOW.md
+deleted file mode 100644
+index f369f88..0000000
+--- a/docs/architecture/01_PIPELINE_DATA_FLOW.md
++++ /dev/null
+@@ -1,73 +0,0 @@
+-# Stage 1: OCR Output Contract
+-
+-### Input:
+-- Raw document image(s)
+-
+-### Output:
+-- Token text (string)
+-- Bounding box (absolute coordinates)
+-- Confidence score (0–1)
+-- Page number
+-
+-### Constraints:
+-- No spelling correction
+-- No merging
+-- No inference
+-- No filtering except confidence floor
+-
+----
+-
+-# Stage 2: Structural Grouping
+-
+-### Input:
+-- OCR tokens + geometry
+-
+-### Output:
+-- Regions labeled as:
+-    - TITLE_BLOCK
+-    - TABLE
+-    - NOTE
+-    - ANNOTATION
+-    - UNKNOWN
+-- Each region contains:
+-    - Ordered OCR tokens
+-    - Region bounding box
+-
+-### Constraints:
+-- Deterministic
+-- Spatial heuristics only
+-- Conservative over-grouping allowed
+-- No semantic labeling of content
+-
+----
+-
+-# Stage 3: LLM Interpretation
+-
+-### Input:
+-- Grouped regions
+-- Raw OCR text
+-- Bounding boxes
+-- Confidence scores
+-- Explicit schema
+-- Hard rules
+-
+-### Output:
+-- Schema-first structured object
+-- Explicit nulls
+-- Evidence references per field
+-
+-### Constraints:
+-- LLM never sees images
+-- LLM never invents text
+-- LLM must justify each non-null value
+-
+----
+-
+-# Stage 4: Validation (Optional)
+-
+-### Input:
+-- One or more interpretation passes
+-
+-### Output:
+-- Agreement → value
+-- Disagreement → null
+\ No newline at end of file
+diff --git a/docs/architecture/02_PIPELINE_DATA_FLOW.md b/docs/architecture/02_PIPELINE_DATA_FLOW.md
+new file mode 100644
+index 0000000..a769c24
+--- /dev/null
++++ b/docs/architecture/02_PIPELINE_DATA_FLOW.md
+@@ -0,0 +1,108 @@
++# Stage 0: Document Normalization (PDF -> images)
++
++### Input:
++- PDF document referenced by **relpath under resolved `DATA_ROOT`**
++- Optional: explicit page selection parameters (e.g., all pages by default)
++
++### Output:
++- A **deterministically ordered** list of raster image outputs, one per page:
++    - `page_num` (1-indexed, matching PDF page order)
++    - `image_relpath` (relpath under an explicitly configured output root, e.g. `artifacts/normalized/...`)
++    - `bbox_space` definition: pixel coordinate space for that image (implicit via width/height)
++- Deterministic file naming:
++    - `page_001.png`, `page_002.png`, … (or equivalent zero-padded scheme)
++- Optional audit metadata:
++    - source PDF relpath
++    - rendering parameters (dpi, color mode)
++    - tool/backend identifier
++    - optional source_sha256
++- Normalized images MUST be materialized as files (not transient in-memory objects) to preserve auditability and reproducibility.
++
++### Constraints:
++- **No OCR**
++- **No text extraction**
++- **No semantic interpretation**
++- **No layout inference**
++- **No content filtering**
++- Rendering parameters must be **explicit and deterministic** (e.g., DPI must be specified; no “auto”)
++- Must not modify raw input PDFs
++- No implicit output paths; output root must be explicitly provided via config/args
++- Stage 0 is a format normalization step, not a perception or analysis step.
++
++---
++
++# Stage 1: OCR Output Contract
++
++### Input:
++- Raster image(s) produced by Stage 0 or explicitly supplied as standalone image files (PNG/JPEG/TIFF only)
++- Each image must be referenced by **relpath under resolved `DATA_ROOT`** (or under an explicitly configured image root, if you later separate raw vs normalized roots)
++
++### Output:
++- Token text (string)
++- Bounding box (absolute coordinates)
++- Confidence score (0–1)
++- Page number
++
++### Constraints:
++- **Stage 1 MUST reject PDFs and all non-image inputs**
++- No spelling correction
++- No merging
++- No inference
++- No filtering except confidence floor
++
++---
++
++# Stage 2: Structural Grouping
++
++### Input:
++- OCR tokens + geometry
++
++### Output:
++- Regions labeled as:
++    - TITLE_BLOCK
++    - TABLE
++    - NOTE
++    - ANNOTATION
++    - UNKNOWN
++- Each region contains:
++    - Ordered OCR tokens
++    - Region bounding box
++
++### Constraints:
++- Deterministic
++- Spatial heuristics only
++- Conservative over-grouping allowed
++- No semantic labeling of content
++
++---
++
++# Stage 3: LLM Interpretation
++
++### Input:
++- Grouped regions
++- Raw OCR text
++- Bounding boxes
++- Confidence scores
++- Explicit schema
++- Hard rules
++
++### Output:
++- Schema-first structured object
++- Explicit nulls
++- Evidence references per field
++
++### Constraints:
++- LLM never sees images
++- LLM never invents text
++- LLM must justify each non-null value
++
++---
++
++# Stage 4: Validation (Optional)
++
++### Input:
++- One or more interpretation passes
++
++### Output:
++- Agreement → value
++- Disagreement → null
+\ No newline at end of file
+diff --git a/docs/architecture/02_MODULE_CONTRACTS.md b/docs/architecture/03_MODULE_CONTRACTS.md
+similarity index 55%
+rename from docs/architecture/02_MODULE_CONTRACTS.md
+rename to docs/architecture/03_MODULE_CONTRACTS.md
+index ac4d4e1..e013369 100644
+--- a/docs/architecture/02_MODULE_CONTRACTS.md
++++ b/docs/architecture/03_MODULE_CONTRACTS.md
+@@ -1,4 +1,21 @@
+-# OCR Module
++# Stage 0 - Document Normalization
++
++### Responsibilities:
++- Render PDF documents to page-level raster images deterministically
++- Preserve page ordering and page index exactly
++- Emit materialized image files suitable for direct OCR input
++
++### Explicitly NOT responsible for:
++- OCR
++- text extraction
++- semantic interpretation
++- layout inference
++- Content filtering
++- In-memory–only rendering (outputs must be materialized for auditability)
++
++---
++
++# Stage 1 - OCR (Perception only)
+ 
+ ### Responsibilities
+ - Text detection  
+@@ -9,10 +26,11 @@
+ - Correction  
+ - Normalization  
+ - Semantic understanding  
++- PDF handling or inspection
+ 
+ ---
+ 
+-# Grouping Module
++# Stage 2 - Structural Grouping
+ 
+ ### Responsibilities
+ - Spatial clustering  
+@@ -25,7 +43,7 @@
+ 
+ ---
+ 
+-# Interpretation Module (LLM)
++# Stage 3 - Interpretation (Text-only LLM)
+ 
+ ### Responsibilities
+ - Mapping evidence to schema fields  
+@@ -40,7 +58,7 @@
+ 
+ ---
+ 
+-# Schema Module
++# Cross-cutting - Schema Module (authoritative, non-stage)
+ 
+ ### Responsibilities
+ - Define allowable output  
+@@ -52,7 +70,7 @@ LLM output outside schema is invalid.
+ 
+ ---
+ 
+-# Validation Module
++# Stage 4 - Validation (Optional)
+ 
+ ### Responsibilities
+ - Compare multiple passes  
+diff --git a/docs/architecture/03_INVARIANTS_AND_ANTI_PATTERNS.md b/docs/architecture/04_INVARIANTS_AND_ANTI_PATTERNS.md
+similarity index 100%
+rename from docs/architecture/03_INVARIANTS_AND_ANTI_PATTERNS.md
+rename to docs/architecture/04_INVARIANTS_AND_ANTI_PATTERNS.md
+diff --git a/docs/architecture/04_LLM_INTERPRETATION_RULES.md b/docs/architecture/05_LLM_INTERPRETATION_RULES.md
+similarity index 100%
+rename from docs/architecture/04_LLM_INTERPRETATION_RULES.md
+rename to docs/architecture/05_LLM_INTERPRETATION_RULES.md
+diff --git a/docs/architecture/05_FIELD_TRUST_AND_NULLABILITY.md b/docs/architecture/06_FIELD_TRUST_AND_NULLABILITY.md
+similarity index 100%
+rename from docs/architecture/05_FIELD_TRUST_AND_NULLABILITY.md
+rename to docs/architecture/06_FIELD_TRUST_AND_NULLABILITY.md
+diff --git a/docs/architecture/06_FAILURE_MODES_AND_AUDITABILITY.md b/docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md
+similarity index 100%
+rename from docs/architecture/06_FAILURE_MODES_AND_AUDITABILITY.md
+rename to docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md
+diff --git a/docs/architecture/07_DATA_RULES_AND_ACCESS.MD b/docs/architecture/08_DATA_RULES_AND_ACCESS.MD
+similarity index 73%
+rename from docs/architecture/07_DATA_RULES_AND_ACCESS.MD
+rename to docs/architecture/08_DATA_RULES_AND_ACCESS.MD
+index da5dc7a..ab8ed15 100644
+--- a/docs/architecture/07_DATA_RULES_AND_ACCESS.MD
++++ b/docs/architecture/08_DATA_RULES_AND_ACCESS.MD
+@@ -3,6 +3,11 @@
+ - The system never assumes their location.
+ - Access to raw drawings is only via explicit configuration.
+ - No module may hardcode paths or access environment variables directly.
++- Normalization outputs:
++    - MAY be written inside the project (e.g. artifacts/)
++    - MUST NOT modify raw input PDFs
++    - MUST be explicitly configured (no implicit paths)
++- No new environment variables are needed.
+ 
+ ---
+ 
 diff --git a/src/ocr/__init__.py b/src/ocr/__init__.py
-new file mode 100644
-index 0000000..fd0f801
---- /dev/null
+index fd0f801..090efa9 100644
+--- a/src/ocr/__init__.py
 +++ b/src/ocr/__init__.py
-@@ -0,0 +1,36 @@
-+"""
-+OCR stage (perception only).
-+
-+Contract (docs/architecture/01_PIPELINE_DATA_FLOW.md):
-+- Input: raw document image(s)
-+- Output: token text, absolute bounding boxes, confidence scores, page number
-+- Constraints: no correction, no merging, no inference; optional confidence floor
-+
-+Data access (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
-+- No environment variable reads in this module
-+- No hardcoded paths
-+- All filesystem access is via explicitly passed resolved data_root/config
-+"""
-+
-+from .contracts import (
-+    BBox,
-+    OcrConfig,
-+    OcrDocumentResult,
-+    OcrEngineName,
-+    OcrError,
-+    OcrPageResult,
-+    OcrToken,
-+)
-+from .module import run_ocr_on_image_relpath
-+
-+__all__ = [
-+    "BBox",
-+    "OcrConfig",
-+    "OcrDocumentResult",
-+    "OcrEngineName",
-+    "OcrError",
-+    "OcrPageResult",
-+    "OcrToken",
-+    "run_ocr_on_image_relpath",
-+]
-+
-diff --git a/src/ocr/artifacts.py b/src/ocr/artifacts.py
-new file mode 100644
-index 0000000..08ebd22
---- /dev/null
-+++ b/src/ocr/artifacts.py
-@@ -0,0 +1,29 @@
-+from __future__ import annotations
-+
-+import json
-+from pathlib import Path
-+from typing import Any
-+
-+from .contracts import OcrDocumentResult
-+
-+
-+def serialize_ocr_result(result: OcrDocumentResult) -> str:
-+    """
-+    Stable JSON serialization for audit artifacts.
-+    """
-+
-+    payload: dict[str, Any] = result.to_dict()
-+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-+
-+
-+def write_ocr_json_artifact(*, result: OcrDocumentResult, out_file: Path) -> None:
-+    """
-+    Write OCR output to a JSON artifact file (machine-readable, auditable).
-+
-+    Note: This helper does not assume any fixed artifact root. Callers provide
-+    an explicit output path as part of their pipeline configuration.
-+    """
-+
-+    out_file.parent.mkdir(parents=True, exist_ok=True)
-+    out_file.write_text(serialize_ocr_result(result), encoding="utf-8")
-+
-diff --git a/src/ocr/cli.py b/src/ocr/cli.py
-new file mode 100644
-index 0000000..107e7e7
---- /dev/null
-+++ b/src/ocr/cli.py
-@@ -0,0 +1,86 @@
-+from __future__ import annotations
-+
-+import argparse
-+from pathlib import Path
-+
-+from .artifacts import write_ocr_json_artifact
-+from .contracts import OcrConfig
-+from .module import run_ocr_on_image_relpath
-+
-+
-+def build_arg_parser() -> argparse.ArgumentParser:
-+    p = argparse.ArgumentParser(
-+        prog="sq-ocr",
-+        description=(
-+            "OCR (perception only): emit token text + bounding boxes + confidences as JSON."
-+        ),
-+    )
-+    p.add_argument(
-+        "--data-root",
-+        required=True,
-+        type=Path,
-+        help="Resolved DATA_ROOT path (must be passed explicitly; no env reads).",
-+    )
-+    p.add_argument(
-+        "--image-relpath",
-+        required=True,
-+        help="Image path relative to --data-root.",
-+    )
-+    p.add_argument(
-+        "--out",
-+        required=True,
-+        type=Path,
-+        help="Output JSON artifact file path.",
-+    )
-+    p.add_argument(
-+        "--confidence-floor",
-+        type=float,
-+        default=0.0,
-+        help="Drop tokens with confidence below this threshold (0..1).",
-+    )
-+    p.add_argument(
-+        "--language",
-+        default="eng",
-+        help="Tesseract language hint (default: eng).",
-+    )
-+    p.add_argument(
-+        "--psm",
-+        type=int,
-+        default=None,
-+        help="Tesseract page segmentation mode (optional).",
-+    )
-+    p.add_argument(
-+        "--timeout-s",
-+        type=float,
-+        default=120.0,
-+        help="Tesseract timeout in seconds.",
-+    )
-+    p.add_argument(
-+        "--compute-source-sha256",
-+        action="store_true",
-+        help="Include SHA-256 of the source file in meta for auditing.",
-+    )
-+    return p
-+
-+
-+def main(argv: list[str] | None = None) -> int:
-+    args = build_arg_parser().parse_args(argv)
-+
-+    config = OcrConfig(
-+        data_root=args.data_root,
-+        confidence_floor=args.confidence_floor,
-+        language=args.language,
-+        psm=args.psm,
-+        timeout_s=args.timeout_s,
-+        compute_source_sha256=args.compute_source_sha256,
-+    )
-+
-+    result = run_ocr_on_image_relpath(config=config, image_relpath=args.image_relpath)
-+    write_ocr_json_artifact(result=result, out_file=args.out)
-+
-+    return 0 if result.ok else 2
-+
-+
-+if __name__ == "__main__":
-+    raise SystemExit(main())
-+
+@@ -1,12 +1,12 @@
+ """
+ OCR stage (perception only).
+ 
+-Contract (docs/architecture/01_PIPELINE_DATA_FLOW.md):
++Contract (docs/architecture/02_PIPELINE_DATA_FLOW.md):
+ - Input: raw document image(s)
+ - Output: token text, absolute bounding boxes, confidence scores, page number
+ - Constraints: no correction, no merging, no inference; optional confidence floor
+ 
+-Data access (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++Data access (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
+ - No environment variable reads in this module
+ - No hardcoded paths
+ - All filesystem access is via explicitly passed resolved data_root/config
 diff --git a/src/ocr/contracts.py b/src/ocr/contracts.py
-new file mode 100644
-index 0000000..7760faa
---- /dev/null
+index 7760faa..22fd38c 100644
+--- a/src/ocr/contracts.py
 +++ b/src/ocr/contracts.py
-@@ -0,0 +1,112 @@
-+from __future__ import annotations
-+
-+from dataclasses import asdict, dataclass
-+from enum import Enum
-+from pathlib import Path
-+from typing import Any
-+
-+
-+class OcrEngineName(str, Enum):
-+    """
-+    OCR backends supported by this module.
-+
-+    Note: The OCR module is *perception only*; the backend must not perform
-+    post-correction / semantic filtering within this module.
-+    """
-+
-+    TESSERACT_CLI = "tesseract_cli"
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class BBox:
-+    """
-+    Absolute pixel coordinates (inclusive-exclusive):
-+    - (x0, y0) is top-left
-+    - (x1, y1) is bottom-right
-+    """
-+
-+    x0: int
-+    y0: int
-+    x1: int
-+    y1: int
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class OcrToken:
-+    """
-+    Single OCR token hypothesis.
-+
-+    `text` must be exactly as recognized by the OCR engine (no correction).
-+    """
-+
-+    token_id: str
-+    page_num: int
-+    text: str
-+    bbox: BBox
-+    confidence: float | None  # normalized 0..1 when available, else None
-+    raw_confidence: float | None  # engine-native confidence when available
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class OcrPageResult:
-+    page_num: int
-+    tokens: list[OcrToken]
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class OcrError:
-+    code: str
-+    message: str
-+    detail: dict[str, Any] | None = None
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class OcrDocumentResult:
-+    """
-+    Machine-readable, auditable OCR output.
-+
-+    On failure, `ok` is False and pages will typically be empty. No content is
-+    fabricated to "fill in" missing OCR results.
-+    """
-+
-+    ok: bool
-+    engine: OcrEngineName
-+    source_image_relpath: str | None
-+    pages: list[OcrPageResult]
-+    errors: list[OcrError]
-+    meta: dict[str, Any]
-+
-+    def to_dict(self) -> dict[str, Any]:
-+        """
-+        Stable JSON-serializable representation (dataclasses -> primitives).
-+        """
-+
-+        return asdict(self)
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class OcrConfig:
-+    """
-+    OCR module configuration.
-+
-+    Architectural constraint (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
-+    - `data_root` must be the resolved DATA_ROOT provided by application startup.
-+    - This module must NOT read environment variables itself.
-+    """
-+
-+    data_root: Path
-+    engine: OcrEngineName = OcrEngineName.TESSERACT_CLI
-+    confidence_floor: float = 0.0  # Allowed filter: contract permits confidence floor only.
-+    language: str = "eng"  # engine hint only; not a semantic correction.
-+    psm: int | None = None  # Tesseract page segmentation mode; if None, use default.
-+    timeout_s: float = 120.0
-+    compute_source_sha256: bool = False  # optional audit metadata
-+
-+    def __post_init__(self) -> None:
-+        if self.confidence_floor < 0.0 or self.confidence_floor > 1.0:
-+            raise ValueError("confidence_floor must be within [0.0, 1.0]")
-+
-+        # Ensure callers pass an actual Path; this module will resolve it for safe access.
-+        if not isinstance(self.data_root, Path):
-+            raise TypeError("data_root must be a pathlib.Path")
-+
+@@ -89,7 +89,7 @@ class OcrConfig:
+     """
+     OCR module configuration.
+ 
+-    Architectural constraint (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++    Architectural constraint (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
+     - `data_root` must be the resolved DATA_ROOT provided by application startup.
+     - This module must NOT read environment variables itself.
+     """
 diff --git a/src/ocr/data_access.py b/src/ocr/data_access.py
-new file mode 100644
-index 0000000..60155bd
---- /dev/null
+index 60155bd..4306997 100644
+--- a/src/ocr/data_access.py
 +++ b/src/ocr/data_access.py
-@@ -0,0 +1,57 @@
-+from __future__ import annotations
-+
-+import hashlib
-+from pathlib import Path
-+
-+
-+class DataAccessError(Exception):
-+    pass
-+
-+
-+def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
-+    """
-+    Resolve a relative path under an explicit, resolved data_root.
-+
-+    Architectural requirements (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
-+    - This module must not assume where data lives.
-+    - This module must not read environment variables.
-+    - All data access is rooted at the resolved data_root passed in explicitly.
-+    """
-+
-+    if relpath.startswith(("/", "\\")) or (":" in relpath and "\\" in relpath):
-+        # Absolute path / Windows drive patterns are not permitted as "relpath".
-+        raise DataAccessError(f"Expected a relative path under data_root, got: {relpath!r}")
-+
-+    root = data_root.expanduser().resolve()
-+    candidate = (root / relpath).resolve()
-+
-+    # Python 3.11 has Path.is_relative_to, but keep a robust fallback.
-+    try:
-+        ok = candidate.is_relative_to(root)
-+    except AttributeError:  # pragma: no cover
-+        root_str = str(root)
-+        cand_str = str(candidate)
-+        ok = cand_str == root_str or cand_str.startswith(root_str + "/")
-+
-+    if not ok:
-+        raise DataAccessError(
-+            f"Path traversal or external reference detected: relpath={relpath!r}"
-+        )
-+
-+    return candidate
-+
-+
-+def sha256_file(path: Path) -> str:
-+    """
-+    Compute SHA-256 of a file for audit metadata.
-+
-+    Note: reading the file is allowed because access is still mediated via
-+    explicit data_root/path resolution by the caller.
-+    """
-+
-+    h = hashlib.sha256()
-+    with path.open("rb") as f:
-+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-+            h.update(chunk)
-+    return h.hexdigest()
-+
-diff --git a/src/ocr/engines/__init__.py b/src/ocr/engines/__init__.py
-new file mode 100644
-index 0000000..fc184c7
---- /dev/null
-+++ b/src/ocr/engines/__init__.py
-@@ -0,0 +1,5 @@
-+from .base import OcrEngine
-+from .tesseract_cli import TesseractCliEngine
-+
-+__all__ = ["OcrEngine", "TesseractCliEngine"]
-+
-diff --git a/src/ocr/engines/base.py b/src/ocr/engines/base.py
-new file mode 100644
-index 0000000..4eb5db1
---- /dev/null
-+++ b/src/ocr/engines/base.py
-@@ -0,0 +1,23 @@
-+from __future__ import annotations
-+
-+from abc import ABC, abstractmethod
-+from pathlib import Path
-+
-+from ..contracts import OcrConfig, OcrDocumentResult
-+
-+
-+class OcrEngine(ABC):
-+    """
-+    Interface for OCR perception engines.
-+
-+    IMPORTANT:
-+    - Engines must return literal text hypotheses, bounding boxes, confidences.
-+    - Engines must NOT apply semantic correction/guessing/normalization.
-+    """
-+
-+    @abstractmethod
-+    def run_on_image_file(
-+        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
-+    ) -> OcrDocumentResult:
-+        raise NotImplementedError
-+
-diff --git a/src/ocr/engines/tesseract_cli.py b/src/ocr/engines/tesseract_cli.py
-new file mode 100644
-index 0000000..9c65bfa
---- /dev/null
-+++ b/src/ocr/engines/tesseract_cli.py
-@@ -0,0 +1,240 @@
-+from __future__ import annotations
-+
-+import csv
-+import subprocess
-+from collections import defaultdict
-+from pathlib import Path
-+from typing import Any
-+
-+from ..contracts import (
-+    BBox,
-+    OcrConfig,
-+    OcrDocumentResult,
-+    OcrEngineName,
-+    OcrError,
-+    OcrPageResult,
-+    OcrToken,
-+)
-+from .base import OcrEngine
-+
-+
-+def _token_id(*, page_num: int, idx: int) -> str:
-+    return f"p{page_num:03d}_t{idx:06d}"
-+
-+
-+def _normalize_confidence(raw_conf: float | None) -> float | None:
-+    if raw_conf is None:
-+        return None
-+    if raw_conf < 0:
-+        return None
-+    # Tesseract TSV is typically 0..100; clamp into [0, 1]
-+    return max(0.0, min(1.0, raw_conf / 100.0))
-+
-+
-+class TesseractCliEngine(OcrEngine):
-+    """
-+    Tesseract OCR via `tesseract` CLI, parsed from TSV output.
-+
-+    This engine performs no correction, no merging, and no semantic filtering.
-+    Only an optional confidence floor is applied, per the Stage 1 contract.
-+    """
-+
-+    def run_on_image_file(
-+        self, *, config: OcrConfig, image_file: Path, source_relpath: str | None
-+    ) -> OcrDocumentResult:
-+        meta: dict[str, Any] = {
-+            "backend": "tesseract",
-+            "backend_mode": "cli",
-+            "language": config.language,
-+            "psm": config.psm,
-+            "confidence_floor": config.confidence_floor,
-+        }
-+
-+        if not image_file.exists():
-+            detail: dict[str, Any] = {"source_image_relpath": source_relpath}
-+            if source_relpath is None:
-+                # Only include absolute path when the caller did not provide a relpath.
-+                detail["image_file"] = str(image_file)
-+            return OcrDocumentResult(
-+                ok=False,
-+                engine=OcrEngineName.TESSERACT_CLI,
-+                source_image_relpath=source_relpath,
-+                pages=[],
-+                errors=[
-+                    OcrError(
-+                        code="OCR_INPUT_NOT_FOUND",
-+                        message="Input image file not found",
-+                        detail=detail,
-+                    )
-+                ],
-+                meta=meta,
-+            )
-+
-+        cmd = [
-+            "tesseract",
-+            str(image_file),
-+            "stdout",
-+            "-l",
-+            config.language,
-+        ]
-+
-+        if config.psm is not None:
-+            cmd.extend(["--psm", str(config.psm)])
-+
-+        # Request TSV output (word-level rows will include bounding boxes + conf + text).
-+        cmd.append("tsv")
-+        # Keep artifacts stable/portable: do not embed absolute paths.
-+        meta["command_template"] = ["tesseract", "<IMAGE_FILE>", *cmd[2:]]
-+
-+        try:
-+            proc = subprocess.run(
-+                cmd,
-+                check=False,
-+                capture_output=True,
-+                text=True,
-+                timeout=config.timeout_s,
-+            )
-+        except FileNotFoundError:
-+            return OcrDocumentResult(
-+                ok=False,
-+                engine=OcrEngineName.TESSERACT_CLI,
-+                source_image_relpath=source_relpath,
-+                pages=[],
-+                errors=[
-+                    OcrError(
-+                        code="OCR_BACKEND_NOT_INSTALLED",
-+                        message="tesseract binary not found on PATH",
-+                        detail={"expected_command": "tesseract"},
-+                    )
-+                ],
-+                meta=meta,
-+            )
-+        except subprocess.TimeoutExpired:
-+            return OcrDocumentResult(
-+                ok=False,
-+                engine=OcrEngineName.TESSERACT_CLI,
-+                source_image_relpath=source_relpath,
-+                pages=[],
-+                errors=[
-+                    OcrError(
-+                        code="OCR_TIMEOUT",
-+                        message="OCR backend timed out",
-+                        detail={"timeout_s": config.timeout_s},
-+                    )
-+                ],
-+                meta=meta,
-+            )
-+
-+        if proc.returncode != 0:
-+            return OcrDocumentResult(
-+                ok=False,
-+                engine=OcrEngineName.TESSERACT_CLI,
-+                source_image_relpath=source_relpath,
-+                pages=[],
-+                errors=[
-+                    OcrError(
-+                        code="OCR_BACKEND_ERROR",
-+                        message="OCR backend returned a non-zero exit code",
-+                        detail={
-+                            "returncode": proc.returncode,
-+                            "stderr": proc.stderr[-4000:],  # truncate for artifact stability
-+                        },
-+                    )
-+                ],
-+                meta=meta,
-+            )
-+
-+        tsv = proc.stdout
-+        # Parse TSV into tokens; keep ordering deterministic by (page, block, par, line, word).
-+        tokens_by_page: dict[int, list[tuple[tuple[int, int, int, int, int], OcrToken]]] = defaultdict(
-+            list
-+        )
-+
-+        reader = csv.DictReader(tsv.splitlines(), delimiter="\t")
-+        seen_any_row = False
-+        idx_by_page: dict[int, int] = defaultdict(int)
-+
-+        for row in reader:
-+            seen_any_row = True
-+
-+            # Tesseract TSV includes multiple "levels". We only emit word-level tokens.
-+            # level meanings: 1=page,2=block,3=para,4=line,5=word
-+            try:
-+                level = int(row.get("level", "") or "0")
-+            except ValueError:
-+                continue
-+            if level != 5:
-+                continue
-+
-+            text = row.get("text", "")
-+            # Emit only actual text hypotheses; do not strip/normalize/correct.
-+            if text == "":
-+                continue
-+
-+            try:
-+                page_num = int(row.get("page_num", "") or "1")
-+                block_num = int(row.get("block_num", "") or "0")
-+                par_num = int(row.get("par_num", "") or "0")
-+                line_num = int(row.get("line_num", "") or "0")
-+                word_num = int(row.get("word_num", "") or "0")
-+
-+                left = int(row.get("left", "") or "0")
-+                top = int(row.get("top", "") or "0")
-+                width = int(row.get("width", "") or "0")
-+                height = int(row.get("height", "") or "0")
-+            except ValueError:
-+                # Malformed geometry rows are dropped (no guessing).
-+                continue
-+
-+            raw_conf: float | None
-+            conf_str = row.get("conf", "")
-+            try:
-+                raw_conf = float(conf_str) if conf_str != "" else None
-+            except ValueError:
-+                raw_conf = None
-+
-+            conf = _normalize_confidence(raw_conf)
-+            if conf is not None and conf < config.confidence_floor:
-+                continue
-+
-+            idx = idx_by_page[page_num]
-+            idx_by_page[page_num] += 1
-+
-+            token = OcrToken(
-+                token_id=_token_id(page_num=page_num, idx=idx),
-+                page_num=page_num,
-+                text=text,
-+                bbox=BBox(x0=left, y0=top, x1=left + width, y1=top + height),
-+                confidence=conf,
-+                raw_confidence=raw_conf,
-+            )
-+
-+            sort_key = (page_num, block_num, par_num, line_num, word_num)
-+            tokens_by_page[page_num].append((sort_key, token))
-+
-+        if not seen_any_row:
-+            # Backend succeeded but produced no parseable TSV rows; return empty success.
-+            return OcrDocumentResult(
-+                ok=True,
-+                engine=OcrEngineName.TESSERACT_CLI,
-+                source_image_relpath=source_relpath,
-+                pages=[],
-+                errors=[],
-+                meta={**meta, "note": "No TSV rows parsed"},
-+            )
-+
-+        pages: list[OcrPageResult] = []
-+        for page_num in sorted(tokens_by_page.keys()):
-+            # Sort tokens deterministically by structural order key.
-+            page_tokens = [t for _, t in sorted(tokens_by_page[page_num], key=lambda x: x[0])]
-+            pages.append(OcrPageResult(page_num=page_num, tokens=page_tokens))
-+
-+        return OcrDocumentResult(
-+            ok=True,
-+            engine=OcrEngineName.TESSERACT_CLI,
-+            source_image_relpath=source_relpath,
-+            pages=pages,
-+            errors=[],
-+            meta=meta,
-+        )
-+
+@@ -12,7 +12,7 @@ def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
+     """
+     Resolve a relative path under an explicit, resolved data_root.
+ 
+-    Architectural requirements (docs/architecture/07_DATA_RULES_AND_ACCESS.MD):
++    Architectural requirements (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
+     - This module must not assume where data lives.
+     - This module must not read environment variables.
+     - All data access is rooted at the resolved data_root passed in explicitly.
 diff --git a/src/ocr/module.py b/src/ocr/module.py
-new file mode 100644
-index 0000000..2a98fed
---- /dev/null
+index 2a98fed..8291c27 100644
+--- a/src/ocr/module.py
 +++ b/src/ocr/module.py
-@@ -0,0 +1,82 @@
-+from __future__ import annotations
-+
-+from pathlib import Path
-+
-+from .contracts import OcrConfig, OcrDocumentResult, OcrEngineName, OcrError
-+from .data_access import DataAccessError, resolve_under_data_root, sha256_file
-+from .engines.tesseract_cli import TesseractCliEngine
-+
-+
-+def _get_engine(engine: OcrEngineName):
-+    if engine == OcrEngineName.TESSERACT_CLI:
-+        return TesseractCliEngine()
-+    raise ValueError(f"Unsupported OCR engine: {engine}")
-+
-+
-+def _attach_source_sha256_if_enabled(
-+    *, config: OcrConfig, image_file: Path, result: OcrDocumentResult
-+) -> OcrDocumentResult:
-+    if not (config.compute_source_sha256 and image_file.exists()):
-+        return result
-+
-+    try:
-+        src_hash = sha256_file(image_file)
-+        return OcrDocumentResult(
-+            ok=result.ok,
-+            engine=result.engine,
-+            source_image_relpath=result.source_image_relpath,
-+            pages=result.pages,
-+            errors=result.errors,
-+            meta={**result.meta, "source_sha256": src_hash},
-+        )
-+    except Exception:
-+        # Do not fail OCR if hashing fails; add an explicit audit note.
-+        return OcrDocumentResult(
-+            ok=result.ok,
-+            engine=result.engine,
-+            source_image_relpath=result.source_image_relpath,
-+            pages=result.pages,
-+            errors=result.errors
-+            + [
-+                OcrError(
-+                    code="OCR_AUDIT_HASH_FAILED",
-+                    message="Failed to compute source SHA-256",
-+                    detail={"source_image_relpath": result.source_image_relpath},
-+                )
-+            ],
-+            meta=result.meta,
-+        )
-+
-+
-+def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDocumentResult:
-+    """
-+    Run OCR on an image referenced by a relative path under `config.data_root`.
-+
-+    This is the preferred interface for pipeline integration to comply with
-+    /docs/architecture/07_DATA_RULES_AND_ACCESS.MD.
-+    """
-+
-+    try:
-+        image_file = resolve_under_data_root(data_root=config.data_root, relpath=image_relpath)
-+    except DataAccessError as e:
-+        return OcrDocumentResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_image_relpath=image_relpath,
-+            pages=[],
-+            errors=[
-+                OcrError(
-+                    code="OCR_DATA_ACCESS_ERROR",
-+                    message=str(e),
-+                    detail={"data_root": str(config.data_root), "relpath": image_relpath},
-+                )
-+            ],
-+            meta={"confidence_floor": config.confidence_floor},
-+        )
-+
-+    engine = _get_engine(config.engine)
-+    result = engine.run_on_image_file(
-+        config=config, image_file=image_file, source_relpath=image_relpath
-+    )
-+    return _attach_source_sha256_if_enabled(config=config, image_file=image_file, result=result)
-+
+@@ -53,7 +53,7 @@ def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDoc
+     Run OCR on an image referenced by a relative path under `config.data_root`.
+ 
+     This is the preferred interface for pipeline integration to comply with
+-    /docs/architecture/07_DATA_RULES_AND_ACCESS.MD.
++    /docs/architecture/08_DATA_RULES_AND_ACCESS.MD.
+     """
+ 
+     try:

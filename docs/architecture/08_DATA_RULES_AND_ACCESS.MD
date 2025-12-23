@@ -3,6 +3,11 @@
 - The system never assumes their location.
 - Access to raw drawings is only via explicit configuration.
 - No module may hardcode paths or access environment variables directly.
+- Normalization outputs:
+    - MAY be written inside the project (e.g. artifacts/)
+    - MUST NOT modify raw input PDFs
+    - MUST be explicitly configured (no implicit paths)
+- No new environment variables are needed.
 
 ---
 

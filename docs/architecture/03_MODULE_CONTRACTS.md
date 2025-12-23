@@ -1,4 +1,21 @@
-# OCR Module
+# Stage 0 - Document Normalization
+
+### Responsibilities:
+- Render PDF documents to page-level raster images deterministically
+- Preserve page ordering and page index exactly
+- Emit materialized image files suitable for direct OCR input
+
+### Explicitly NOT responsible for:
+- OCR
+- text extraction
+- semantic interpretation
+- layout inference
+- Content filtering
+- In-memory–only rendering (outputs must be materialized for auditability)
+
+---
+
+# Stage 1 - OCR (Perception only)
 
 ### Responsibilities
 - Text detection  
@@ -9,10 +26,11 @@
 - Correction  
 - Normalization  
 - Semantic understanding  
+- PDF handling or inspection
 
 ---
 
-# Grouping Module
+# Stage 2 - Structural Grouping
 
 ### Responsibilities
 - Spatial clustering  
@@ -25,7 +43,7 @@
 
 ---
 
-# Interpretation Module (LLM)
+# Stage 3 - Interpretation (Text-only LLM)
 
 ### Responsibilities
 - Mapping evidence to schema fields  
@@ -40,7 +58,7 @@
 
 ---
 
-# Schema Module
+# Cross-cutting - Schema Module (authoritative, non-stage)
 
 ### Responsibilities
 - Define allowable output  
@@ -52,8 +70,13 @@ LLM output outside schema is invalid.
 
 ---
 
-# Validation Module
+# Stage 4 - Validation (Optional)
 
 ### Responsibilities
 - Compare multiple passes  
 - Resolve disagreements  
+
+### Explicitly NOT responsible for:
+- Introducing new values
+- Selecting "best" answers under disagreement
+- Overring schema constraints
