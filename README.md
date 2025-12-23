@@ -37,11 +37,31 @@ OCR does not accept PDFs
 
 ### Current status
 
-Stage 0 (PDF normalization) is defined/spec'd but not yet implemented.
+Stage 0 (PDF normalization) is implemented (see `src/normalize_pdf/`).
 
 The full pipeline is not wired end-to-end in this repo yet. For now, you can run **Stage 1 (OCR)** to generate an auditable JSON artifact that downstream stages will consume later.
 
 Stages 2–4 are not yet implemented.
+
+---
+
+## Run Stage 0 (Normalization)
+
+Stage 0 is the **only** place PDFs are handled. It renders a PDF into deterministic per-page raster images and emits a JSON manifest.
+
+```bash
+python3 -m normalize_pdf.cli \
+  --data-root "/absolute/path/to/your/DATA_ROOT" \
+  --pdf-relpath "drawings/example.pdf" \
+  --out-root "/absolute/path/to/output_root" \
+  --out-manifest "artifacts/normalized/example.normalize.json" \
+  --dpi 300 \
+  --color-mode rgb
+```
+
+Notes:
+- Output images are written under `--out-root/<safe_pdf_id>/page_001.png`, `page_002.png`, ...
+- If `pypdfium2` is not installed, Stage 0 will return `ok=false` with an explicit error in the manifest.
 
 ---
 

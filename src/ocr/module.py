@@ -56,6 +56,22 @@ def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDoc
     /docs/architecture/08_DATA_RULES_AND_ACCESS.MD.
     """
 
+    if image_relpath.strip().lower().endswith(".pdf"):
+        return OcrDocumentResult(
+            ok=False,
+            engine=config.engine,
+            source_image_relpath=image_relpath,
+            pages=[],
+            errors=[
+                OcrError(
+                    code="OCR_INPUT_IS_PDF",
+                    message="Stage 1 OCR rejects PDF inputs; PDFs must be normalized to images in Stage 0.",
+                    detail={"source_image_relpath": image_relpath},
+                )
+            ],
+            meta={"confidence_floor": config.confidence_floor},
+        )
+
     try:
         image_file = resolve_under_data_root(data_root=config.data_root, relpath=image_relpath)
     except DataAccessError as e:
