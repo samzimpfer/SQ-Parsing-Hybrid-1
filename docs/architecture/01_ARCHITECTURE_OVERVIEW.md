@@ -43,6 +43,7 @@ Any implementation using these approaches is invalid.
 # Architectural Philosophy
 - OCR produces hypotheses, not truth
 - Grouping is structural, not semantic
+- Grouping outputs **document primitives** (token → line → block) and optionally higher-level **region candidates** (e.g., title block, table-like, notes) using deterministic spatial heuristics. Grouping must also emit stable reading order for every group to enable auditable interpretation
 - LLMs judge evidence, not pixels
 - Absence of evidence → null
 - Confidence comes from structure, not model belief

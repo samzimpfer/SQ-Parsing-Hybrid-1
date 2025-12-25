@@ -1,838 +1,248 @@
-diff --git a/README.md b/README.md
-index e57b54a..498b0c5 100644
---- a/README.md
-+++ b/README.md
-@@ -37,7 +37,7 @@ OCR does not accept PDFs
+diff --git a/docs/architecture/01_ARCHITECTURE_OVERVIEW.md b/docs/architecture/01_ARCHITECTURE_OVERVIEW.md
+index 55a8465..d42e179 100644
+--- a/docs/architecture/01_ARCHITECTURE_OVERVIEW.md
++++ b/docs/architecture/01_ARCHITECTURE_OVERVIEW.md
+@@ -43,6 +43,7 @@ Any implementation using these approaches is invalid.
+ # Architectural Philosophy
+ - OCR produces hypotheses, not truth
+ - Grouping is structural, not semantic
++- Grouping outputs **document primitives** (token → line → block) and optionally higher-level **region candidates** (e.g., title block, table-like, notes) using deterministic spatial heuristics. Grouping must also emit stable reading order for every group to enable auditable interpretation
+ - LLMs judge evidence, not pixels
+ - Absence of evidence → null
+ - Confidence comes from structure, not model belief
+diff --git a/docs/architecture/02_PIPELINE_DATA_FLOW.md b/docs/architecture/02_PIPELINE_DATA_FLOW.md
+index a769c24..0efbfbd 100644
+--- a/docs/architecture/02_PIPELINE_DATA_FLOW.md
++++ b/docs/architecture/02_PIPELINE_DATA_FLOW.md
+@@ -1,78 +1,114 @@
+-# Stage 0: Document Normalization (PDF -> images)
++# Stage 0: Document Normalization (PDF → images)
  
- ### Current status
+-### Input:
+-- PDF document referenced by **relpath under resolved `DATA_ROOT`**
++### Input
++- PDF document referenced by **relpath under resolved** `DATA_ROOT`
+ - Optional: explicit page selection parameters (e.g., all pages by default)
  
--Stage 0 (PDF normalization) is defined/spec'd but not yet implemented.
-+Stage 0 (PDF normalization) is implemented (see `src/normalize_pdf/`).
+-### Output:
+-- A **deterministically ordered** list of raster image outputs, one per page:
++### Output
++- A deterministically ordered list of raster image outputs, one per page:
+     - `page_num` (1-indexed, matching PDF page order)
+     - `image_relpath` (relpath under an explicitly configured output root, e.g. `artifacts/normalized/...`)
+     - `bbox_space` definition: pixel coordinate space for that image (implicit via width/height)
+-- Deterministic file naming:
++
++- Deterministic file naming
+     - `page_001.png`, `page_002.png`, … (or equivalent zero-padded scheme)
+-- Optional audit metadata:
+-    - source PDF relpath
+-    - rendering parameters (dpi, color mode)
+-    - tool/backend identifier
++
++- Optional audit metadata
++    - source PDF relpath  
++    - rendering parameters (dpi, color mode)  
++    - tool/backend identifier  
+     - optional source_sha256
++
+ - Normalized images MUST be materialized as files (not transient in-memory objects) to preserve auditability and reproducibility.
  
- The full pipeline is not wired end-to-end in this repo yet. For now, you can run **Stage 1 (OCR)** to generate an auditable JSON artifact that downstream stages will consume later.
- 
-@@ -45,6 +45,26 @@ Stages 2–4 are not yet implemented.
+-### Constraints:
++### Constraints
+ - **No OCR**
+ - **No text extraction**
+ - **No semantic interpretation**
+ - **No layout inference**
+ - **No content filtering**
+-- Rendering parameters must be **explicit and deterministic** (e.g., DPI must be specified; no “auto”)
+-- Must not modify raw input PDFs
+-- No implicit output paths; output root must be explicitly provided via config/args
++- Rendering parameters must be **explicit and deterministic** (e.g., DPI must be specified; no “auto”)  
++- Must not modify raw input PDFs  
++- No implicit output paths; output root must be explicitly provided via config/args  
+ - Stage 0 is a format normalization step, not a perception or analysis step.
  
  ---
  
-+## Run Stage 0 (Normalization)
-+
-+Stage 0 is the **only** place PDFs are handled. It renders a PDF into deterministic per-page raster images and emits a JSON manifest.
-+
-+```bash
-+python3 -m normalize_pdf.cli \
-+  --data-root "/absolute/path/to/your/DATA_ROOT" \
-+  --pdf-relpath "drawings/example.pdf" \
-+  --out-root "/absolute/path/to/output_root" \
-+  --out-manifest "artifacts/normalized/example.normalize.json" \
-+  --dpi 300 \
-+  --color-mode rgb
-+```
-+
-+Notes:
-+- Output images are written under `--out-root/<safe_pdf_id>/page_001.png`, `page_002.png`, ...
-+- If `pypdfium2` is not installed, Stage 0 will return `ok=false` with an explicit error in the manifest.
-+
-+---
-+
- ## Run OCR (Stage 1)
+ # Stage 1: OCR Output Contract
  
- ### Prerequisites
-diff --git a/src/normalize_pdf/__init__.py b/src/normalize_pdf/__init__.py
-new file mode 100644
-index 0000000..9cf2df3
---- /dev/null
-+++ b/src/normalize_pdf/__init__.py
-@@ -0,0 +1,32 @@
-+"""
-+Stage 0 - Document Normalization (PDF -> deterministic per-page raster images).
-+
-+Contract: `docs/architecture/02_PIPELINE_DATA_FLOW.md` (Stage 0)
-+Data access: `docs/architecture/08_DATA_RULES_AND_ACCESS.MD`
-+
-+This package is intentionally limited to format normalization:
-+- It renders PDFs to images deterministically.
-+- It performs NO OCR, text extraction, layout inference, or content filtering.
-+- It is the ONLY stage allowed to handle PDFs.
-+"""
-+
-+from .contracts import (
-+    ColorMode,
-+    NormalizeEngineName,
-+    NormalizePdfConfig,
-+    NormalizePdfError,
-+    NormalizePdfPage,
-+    NormalizePdfResult,
-+)
-+from .module import run_normalize_pdf_relpath
-+
-+__all__ = [
-+    "ColorMode",
-+    "NormalizeEngineName",
-+    "NormalizePdfConfig",
-+    "NormalizePdfError",
-+    "NormalizePdfPage",
-+    "NormalizePdfResult",
-+    "run_normalize_pdf_relpath",
-+]
-+
-diff --git a/src/normalize_pdf/artifacts.py b/src/normalize_pdf/artifacts.py
-new file mode 100644
-index 0000000..e6343f9
---- /dev/null
-+++ b/src/normalize_pdf/artifacts.py
-@@ -0,0 +1,18 @@
-+from __future__ import annotations
-+
-+import json
-+from pathlib import Path
-+from typing import Any
-+
-+from .contracts import NormalizePdfResult
-+
-+
-+def serialize_normalize_result(result: NormalizePdfResult) -> str:
-+    payload: dict[str, Any] = result.to_dict()
-+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-+
-+
-+def write_normalize_manifest_json(*, result: NormalizePdfResult, out_manifest: Path) -> None:
-+    out_manifest.parent.mkdir(parents=True, exist_ok=True)
-+    out_manifest.write_text(serialize_normalize_result(result), encoding="utf-8")
-+
-diff --git a/src/normalize_pdf/cli.py b/src/normalize_pdf/cli.py
-new file mode 100644
-index 0000000..cba82c4
---- /dev/null
-+++ b/src/normalize_pdf/cli.py
-@@ -0,0 +1,62 @@
-+from __future__ import annotations
-+
-+import argparse
-+from pathlib import Path
-+
-+from .artifacts import write_normalize_manifest_json
-+from .contracts import ColorMode, NormalizePdfConfig
-+from .module import run_normalize_pdf_relpath
-+
-+
-+def build_arg_parser() -> argparse.ArgumentParser:
-+    p = argparse.ArgumentParser(
-+        prog="sq-normalize-pdf",
-+        description="Stage 0: render PDF -> deterministic per-page images + JSON manifest.",
-+    )
-+    p.add_argument("--data-root", required=True, type=Path, help="Resolved DATA_ROOT path.")
-+    p.add_argument("--pdf-relpath", required=True, help="PDF path relative to --data-root.")
-+    p.add_argument("--out-root", required=True, type=Path, help="Explicit output root directory.")
-+    p.add_argument("--out-manifest", required=True, type=Path, help="Output manifest JSON file.")
-+    p.add_argument("--dpi", type=int, default=300, help="Render DPI (explicit, deterministic).")
-+    p.add_argument(
-+        "--color-mode",
-+        choices=[m.value for m in ColorMode],
-+        default=ColorMode.RGB.value,
-+        help="Color mode for raster output.",
-+    )
-+    p.add_argument(
-+        "--page-selection",
-+        default=None,
-+        help='Optional page selection like "1,3-5". Default: all pages.',
-+    )
-+    p.add_argument("--timeout-s", type=float, default=300.0, help="Backend timeout (best-effort).")
-+    p.add_argument(
-+        "--compute-source-sha256",
-+        action="store_true",
-+        help="Include SHA-256 of the source PDF in meta for auditing.",
-+    )
-+    return p
-+
-+
-+def main(argv: list[str] | None = None) -> int:
-+    args = build_arg_parser().parse_args(argv)
-+
-+    config = NormalizePdfConfig(
-+        data_root=args.data_root,
-+        out_root=args.out_root,
-+        dpi=args.dpi,
-+        color_mode=ColorMode(args.color_mode),
-+        page_selection=args.page_selection,
-+        timeout_s=args.timeout_s,
-+        compute_source_sha256=args.compute_source_sha256,
-+    )
-+
-+    result = run_normalize_pdf_relpath(config=config, pdf_relpath=args.pdf_relpath)
-+    write_normalize_manifest_json(result=result, out_manifest=args.out_manifest)
-+
-+    return 0 if result.ok else 2
-+
-+
-+if __name__ == "__main__":
-+    raise SystemExit(main())
-+
-diff --git a/src/normalize_pdf/contracts.py b/src/normalize_pdf/contracts.py
-new file mode 100644
-index 0000000..16308f0
---- /dev/null
-+++ b/src/normalize_pdf/contracts.py
-@@ -0,0 +1,76 @@
-+from __future__ import annotations
-+
-+from dataclasses import asdict, dataclass
-+from enum import Enum
-+from pathlib import Path
-+from typing import Any
-+
-+
-+class ColorMode(str, Enum):
-+    RGB = "rgb"
-+    GRAY = "gray"
-+
-+
-+class NormalizeEngineName(str, Enum):
-+    """
-+    Rendering backend identifiers.
-+    """
-+
-+    PYPDFIUM2 = "pypdfium2"
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class NormalizePdfError:
-+    code: str
-+    message: str
-+    detail: dict[str, Any] | None = None
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class NormalizePdfPage:
-+    page_num: int  # 1-indexed
-+    image_relpath: str  # relative to out_root
-+    width_px: int
-+    height_px: int
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class NormalizePdfResult:
-+    ok: bool
-+    engine: NormalizeEngineName
-+    source_pdf_relpath: str
-+    render_params: dict[str, Any]
-+    pages: list[NormalizePdfPage]
-+    errors: list[NormalizePdfError]
-+    meta: dict[str, Any]
-+
-+    def to_dict(self) -> dict[str, Any]:
-+        return asdict(self)
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class NormalizePdfConfig:
-+    """
-+    Stage 0 configuration.
-+
-+    Data access rule (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
-+    - `data_root` and `out_root` must be passed explicitly
-+    - no environment variable reads in this module
-+    - no implicit output directories
-+    """
-+
-+    data_root: Path
-+    out_root: Path
-+    engine: NormalizeEngineName = NormalizeEngineName.PYPDFIUM2
-+    dpi: int = 300
-+    color_mode: ColorMode = ColorMode.RGB
-+    page_selection: str | None = None  # e.g. "1,3-5"; None => all pages
-+    timeout_s: float = 300.0
-+    compute_source_sha256: bool = False
-+
-+    def __post_init__(self) -> None:
-+        if self.dpi <= 0:
-+            raise ValueError("dpi must be a positive integer")
-+        if not isinstance(self.data_root, Path) or not isinstance(self.out_root, Path):
-+            raise TypeError("data_root and out_root must be pathlib.Path")
-+
-diff --git a/src/normalize_pdf/data_access.py b/src/normalize_pdf/data_access.py
-new file mode 100644
-index 0000000..b6e106d
---- /dev/null
-+++ b/src/normalize_pdf/data_access.py
-@@ -0,0 +1,45 @@
-+from __future__ import annotations
-+
-+import hashlib
-+from pathlib import Path
-+
-+
-+class DataAccessError(Exception):
-+    pass
-+
-+
-+def resolve_under_data_root(*, data_root: Path, relpath: str) -> Path:
-+    """
-+    Resolve a relative path under an explicit, resolved data_root.
-+
-+    Architectural requirements (docs/architecture/08_DATA_RULES_AND_ACCESS.MD):
-+    - no module may hardcode paths or read env vars directly
-+    - all access to external/raw data is via explicitly passed configuration
-+    """
-+
-+    if relpath.startswith(("/", "\\")) or (":" in relpath and "\\" in relpath):
-+        raise DataAccessError(f"Expected a relative path under data_root, got: {relpath!r}")
-+
-+    root = data_root.expanduser().resolve()
-+    candidate = (root / relpath).resolve()
-+
-+    try:
-+        ok = candidate.is_relative_to(root)
-+    except AttributeError:  # pragma: no cover
-+        root_str = str(root)
-+        cand_str = str(candidate)
-+        ok = cand_str == root_str or cand_str.startswith(root_str + "/")
-+
-+    if not ok:
-+        raise DataAccessError(f"Path traversal or external reference detected: relpath={relpath!r}")
-+
-+    return candidate
-+
-+
-+def sha256_file(path: Path) -> str:
-+    h = hashlib.sha256()
-+    with path.open("rb") as f:
-+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-+            h.update(chunk)
-+    return h.hexdigest()
-+
-diff --git a/src/normalize_pdf/module.py b/src/normalize_pdf/module.py
-new file mode 100644
-index 0000000..53f0413
---- /dev/null
-+++ b/src/normalize_pdf/module.py
-@@ -0,0 +1,316 @@
-+from __future__ import annotations
-+
-+import re
-+from pathlib import Path
-+from typing import Any
-+
-+from normalized_pdf.engines import Pypdfium2Engine
-+
-+from .contracts import (
-+    NormalizeEngineName,
-+    NormalizePdfConfig,
-+    NormalizePdfError,
-+    NormalizePdfPage,
-+    NormalizePdfResult,
-+)
-+from .data_access import DataAccessError, resolve_under_data_root, sha256_file
-+
-+
-+def _safe_pdf_id(pdf_relpath: str) -> str:
-+    # Deterministic mapping from relpath -> filesystem-safe identifier.
-+    s = pdf_relpath.replace("\\", "/")
-+    if s.lower().endswith(".pdf"):
-+        s = s[: -len(".pdf")]
-+    s = s.replace("/", "__")
-+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-+    s = re.sub(r"_+", "_", s).strip("_")
-+    return s or "pdf"
-+
-+
-+def _parse_page_selection(selection: str | None, *, page_count: int) -> list[int] | None:
-+    """
-+    Parse "1,3-5" into a sorted list of unique 1-indexed page numbers.
-+    None => all pages.
-+    """
-+
-+    if selection is None or selection.strip() == "":
-+        return list(range(1, page_count + 1))
-+
-+    pages: set[int] = set()
-+    for part in selection.split(","):
-+        part = part.strip()
-+        if not part:
-+            continue
-+        if "-" in part:
-+            a_str, b_str = part.split("-", 1)
-+            a = int(a_str.strip())
-+            b = int(b_str.strip())
-+            if a <= 0 or b <= 0:
-+                raise ValueError("page numbers must be >= 1")
-+            if b < a:
-+                raise ValueError(f"invalid range: {part!r}")
-+            for p in range(a, b + 1):
-+                pages.add(p)
-+        else:
-+            p = int(part)
-+            if p <= 0:
-+                raise ValueError("page numbers must be >= 1")
-+            pages.add(p)
-+
-+    if not pages:
-+        return []
-+
-+    ordered = sorted(pages)
-+    if ordered[0] < 1 or ordered[-1] > page_count:
-+        raise ValueError(f"page selection out of bounds (1..{page_count})")
-+    return ordered
-+
-+
-+def _get_engine(engine: NormalizeEngineName):
-+    if engine == NormalizeEngineName.PYPDFIUM2:
-+        return Pypdfium2Engine()
-+    raise ValueError(f"Unsupported normalization engine: {engine}")
-+
-+
-+def validate_normalize_result(*, config: NormalizePdfConfig, result: NormalizePdfResult) -> list[NormalizePdfError]:
-+    """
-+    Lightweight validation for manual/incremental testing:
-+    - page numbers are 1-indexed
-+    - ordering is deterministic (ascending by page_num)
-+    - output filenames match page_###.png
-+    - files exist on disk under out_root
-+    """
-+
-+    errs: list[NormalizePdfError] = []
-+    if result.pages != sorted(result.pages, key=lambda p: p.page_num):
-+        errs.append(
-+            NormalizePdfError(
-+                code="NORMALIZE_NONDETERMINISTIC_ORDER",
-+                message="Pages are not ordered by ascending page_num",
-+            )
-+        )
-+
-+    for p in result.pages:
-+        if p.page_num < 1:
-+            errs.append(
-+                NormalizePdfError(
-+                    code="NORMALIZE_PAGE_NOT_1_INDEXED",
-+                    message="page_num must be 1-indexed",
-+                    detail={"page_num": p.page_num},
-+                )
-+            )
-+        expected_name = f"page_{p.page_num:03d}.png"
-+        if not p.image_relpath.replace("\\", "/").endswith("/" + expected_name) and not p.image_relpath.endswith(
-+            expected_name
-+        ):
-+            errs.append(
-+                NormalizePdfError(
-+                    code="NORMALIZE_BAD_FILENAME",
-+                    message="image_relpath does not match deterministic naming",
-+                    detail={"image_relpath": p.image_relpath, "expected_suffix": expected_name},
-+                )
-+            )
-+
-+        out_file = (config.out_root.expanduser().resolve() / p.image_relpath).resolve()
-+        if not out_file.exists():
-+            errs.append(
-+                NormalizePdfError(
-+                    code="NORMALIZE_OUTPUT_MISSING",
-+                    message="Expected output image file missing on disk",
-+                    detail={"image_relpath": p.image_relpath},
-+                )
-+            )
-+
-+    return errs
-+
-+
-+def run_normalize_pdf_relpath(*, config: NormalizePdfConfig, pdf_relpath: str) -> NormalizePdfResult:
-+    """
-+    Preferred Stage 0 programmatic entrypoint.
-+
-+    Input: PDF relpath under `config.data_root`
-+    Output: materialized per-page images under `config.out_root` + JSON-ready manifest result
-+    """
-+
-+    meta: dict[str, Any] = {}
-+
-+    # Enforce Stage 0 scope: only PDFs.
-+    if not pdf_relpath.lower().endswith(".pdf"):
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_INPUT_NOT_PDF",
-+                    message="Stage 0 only accepts PDFs (by .pdf extension)",
-+                    detail={"pdf_relpath": pdf_relpath},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    try:
-+        pdf_file = resolve_under_data_root(data_root=config.data_root, relpath=pdf_relpath)
-+    except DataAccessError as e:
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_DATA_ACCESS_ERROR",
-+                    message=str(e),
-+                    detail={"data_root": str(config.data_root), "relpath": pdf_relpath},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    if not pdf_file.exists():
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_INPUT_NOT_FOUND",
-+                    message="Input PDF not found",
-+                    detail={"source_pdf_relpath": pdf_relpath},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    out_root = config.out_root.expanduser().resolve()
-+    out_root.mkdir(parents=True, exist_ok=True)
-+
-+    safe_id = _safe_pdf_id(pdf_relpath)
-+    out_dir = out_root / safe_id
-+    out_dir.mkdir(parents=True, exist_ok=True)
-+
-+    engine = _get_engine(config.engine)
-+
-+    try:
-+        page_count = engine.get_page_count(pdf_file=pdf_file)
-+    except Exception as e:
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value, "backend": engine.backend_id()},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_BACKEND_PAGECOUNT_FAILED",
-+                    message="Failed to read PDF page count",
-+                    detail={"error": repr(e)},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    try:
-+        pages_to_render = _parse_page_selection(config.page_selection, page_count=page_count) or []
-+    except Exception as e:
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value, "backend": engine.backend_id()},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_BAD_PAGE_SELECTION",
-+                    message="Invalid page_selection",
-+                    detail={"page_selection": config.page_selection, "error": str(e)},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    try:
-+        rendered_pages, backend_params = engine.render_pdf_to_images(
-+            pdf_file=pdf_file,
-+            out_dir=out_dir,
-+            dpi=config.dpi,
-+            color_mode=config.color_mode,
-+            pages=pages_to_render,
-+            timeout_s=config.timeout_s,
-+        )
-+    except Exception as e:
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_pdf_relpath=pdf_relpath,
-+            render_params={"dpi": config.dpi, "color_mode": config.color_mode.value, "backend": engine.backend_id()},
-+            pages=[],
-+            errors=[
-+                NormalizePdfError(
-+                    code="NORMALIZE_BACKEND_RENDER_FAILED",
-+                    message="PDF rendering failed",
-+                    detail={"error": repr(e)},
-+                )
-+            ],
-+            meta=meta,
-+        )
-+
-+    pages: list[NormalizePdfPage] = []
-+    for rp in rendered_pages:
-+        # Convert absolute output file -> relpath under out_root
-+        image_relpath = str((rp.image_file.resolve()).relative_to(out_root)).replace("\\", "/")
-+        pages.append(
-+            NormalizePdfPage(
-+                page_num=rp.page_num,
-+                image_relpath=image_relpath,
-+                width_px=rp.width_px,
-+                height_px=rp.height_px,
-+            )
-+        )
-+
-+    if config.compute_source_sha256:
-+        try:
-+            meta["source_sha256"] = sha256_file(pdf_file)
-+        except Exception as e:
-+            meta.setdefault("audit_warnings", []).append(
-+                {"code": "NORMALIZE_SOURCE_HASH_FAILED", "error": repr(e)}
-+            )
-+
-+    render_params: dict[str, Any] = {
-+        "dpi": config.dpi,
-+        "color_mode": config.color_mode.value,
-+        "backend": engine.backend_id(),
-+        "backend_version": engine.backend_version(),
-+    }
-+    render_params.update(backend_params)
-+
-+    result = NormalizePdfResult(
-+        ok=True,
-+        engine=config.engine,
-+        source_pdf_relpath=pdf_relpath,
-+        render_params=render_params,
-+        pages=sorted(pages, key=lambda p: p.page_num),
-+        errors=[],
-+        meta=meta,
-+    )
-+
-+    validation_errors = validate_normalize_result(config=config, result=result)
-+    if validation_errors:
-+        return NormalizePdfResult(
-+            ok=False,
-+            engine=result.engine,
-+            source_pdf_relpath=result.source_pdf_relpath,
-+            render_params=result.render_params,
-+            pages=result.pages,
-+            errors=validation_errors,
-+            meta=result.meta,
-+        )
-+
-+    return result
-+
-diff --git a/src/normalized_pdf/__init__.py b/src/normalized_pdf/__init__.py
-new file mode 100644
-index 0000000..da974b1
---- /dev/null
-+++ b/src/normalized_pdf/__init__.py
-@@ -0,0 +1,7 @@
-+"""
-+Internal package for PDF normalization engines.
-+
-+The public Stage 0 API lives in `normalize_pdf.*`.
-+Engines are separated under `normalized_pdf.engines` per repo conventions.
-+"""
-+
-diff --git a/src/normalized_pdf/engines/__init__.py b/src/normalized_pdf/engines/__init__.py
-new file mode 100644
-index 0000000..28e562a
---- /dev/null
-+++ b/src/normalized_pdf/engines/__init__.py
-@@ -0,0 +1,5 @@
-+from .base import EngineRenderedPage, PdfNormalizationEngine
-+from .pypdfium2_engine import Pypdfium2Engine
-+
-+__all__ = ["EngineRenderedPage", "PdfNormalizationEngine", "Pypdfium2Engine"]
-+
-diff --git a/src/normalized_pdf/engines/base.py b/src/normalized_pdf/engines/base.py
-new file mode 100644
-index 0000000..878b064
---- /dev/null
-+++ b/src/normalized_pdf/engines/base.py
-@@ -0,0 +1,58 @@
-+from __future__ import annotations
-+
-+from abc import ABC, abstractmethod
-+from dataclasses import dataclass
-+from pathlib import Path
-+from typing import Any
-+
-+from normalize_pdf.contracts import ColorMode
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class EngineRenderedPage:
-+    page_num: int  # 1-indexed
-+    image_file: Path  # absolute output file path
-+    width_px: int
-+    height_px: int
-+
-+
-+class PdfNormalizationEngine(ABC):
-+    """
-+    Stage 0 rendering engine abstraction.
-+
-+    Engines must:
-+    - Render PDF pages to raster images (materialized files)
-+    - Be deterministic for a given input+params
-+    - Perform NO OCR, text extraction, layout inference, or filtering
-+    """
-+
-+    @abstractmethod
-+    def backend_id(self) -> str:
-+        raise NotImplementedError
-+
-+    def backend_version(self) -> str | None:
-+        return None
-+
-+    @abstractmethod
-+    def get_page_count(self, *, pdf_file: Path) -> int:
-+        raise NotImplementedError
-+
-+    @abstractmethod
-+    def render_pdf_to_images(
-+        self,
-+        *,
-+        pdf_file: Path,
-+        out_dir: Path,
-+        dpi: int,
-+        color_mode: ColorMode,
-+        pages: list[int],  # 1-indexed, explicit ordering
-+        timeout_s: float,
-+    ) -> tuple[list[EngineRenderedPage], dict[str, Any]]:
-+        """
-+        Return:
-+        - list of rendered pages (in the same order as `pages`)
-+        - render_params fragment (backend info/version/etc) to be merged into manifest
-+        """
-+
-+        raise NotImplementedError
-+
-diff --git a/src/normalized_pdf/engines/pypdfium2_engine.py b/src/normalized_pdf/engines/pypdfium2_engine.py
-new file mode 100644
-index 0000000..7b41736
---- /dev/null
-+++ b/src/normalized_pdf/engines/pypdfium2_engine.py
-@@ -0,0 +1,92 @@
-+from __future__ import annotations
-+
-+from pathlib import Path
-+from typing import Any
-+
-+from normalize_pdf.contracts import ColorMode
-+
-+from .base import EngineRenderedPage, PdfNormalizationEngine
-+
-+
-+class Pypdfium2Engine(PdfNormalizationEngine):
-+    def backend_id(self) -> str:
-+        return "pypdfium2"
-+
-+    def backend_version(self) -> str | None:
-+        try:
-+            import pypdfium2 as pdfium  # type: ignore
-+
-+            return getattr(pdfium, "__version__", None)
-+        except Exception:
-+            return None
-+
-+    def _require_pdfium(self):
-+        try:
-+            import pypdfium2 as pdfium  # type: ignore
-+
-+            return pdfium
-+        except ImportError as e:
-+            raise RuntimeError(
-+                "Missing dependency: pypdfium2 is required for Stage 0 rendering."
-+            ) from e
-+
-+    def get_page_count(self, *, pdf_file: Path) -> int:
-+        pdfium = self._require_pdfium()
-+        doc = pdfium.PdfDocument(str(pdf_file))
-+        return len(doc)
-+
-+    def render_pdf_to_images(
-+        self,
-+        *,
-+        pdf_file: Path,
-+        out_dir: Path,
-+        dpi: int,
-+        color_mode: ColorMode,
-+        pages: list[int],
-+        timeout_s: float,
-+    ) -> tuple[list[EngineRenderedPage], dict[str, Any]]:
-+        # Note: pypdfium2 does not expose a straightforward per-call timeout.
-+        _ = timeout_s
-+
-+        pdfium = self._require_pdfium()
-+        doc = pdfium.PdfDocument(str(pdf_file))
-+        page_count = len(doc)
-+
-+        scale = dpi / 72.0  # PDF points are 1/72 inch
-+
-+        out_dir.mkdir(parents=True, exist_ok=True)
-+
-+        rendered: list[EngineRenderedPage] = []
-+        for page_num in pages:
-+            if page_num < 1 or page_num > page_count:
-+                raise ValueError(f"Page out of range: {page_num} (1..{page_count})")
-+
-+            page = doc[page_num - 1]
-+            bitmap = page.render(scale=scale)
-+
-+            # Convert to PIL and save deterministically.
-+            pil_img = bitmap.to_pil()
-+            if color_mode == ColorMode.GRAY:
-+                pil_img = pil_img.convert("L")
-+            else:
-+                pil_img = pil_img.convert("RGB")
-+
-+            width_px, height_px = pil_img.size
-+            out_file = out_dir / f"page_{page_num:03d}.png"
-+            pil_img.save(out_file, format="PNG")
-+
-+            rendered.append(
-+                EngineRenderedPage(
-+                    page_num=page_num,
-+                    image_file=out_file,
-+                    width_px=int(width_px),
-+                    height_px=int(height_px),
-+                )
-+            )
-+
-+        render_params: dict[str, Any] = {
-+            "backend": self.backend_id(),
-+            "backend_version": self.backend_version(),
-+        }
-+        return rendered, render_params
-+
-diff --git a/src/ocr/module.py b/src/ocr/module.py
-index 8291c27..ec9ab98 100644
---- a/src/ocr/module.py
-+++ b/src/ocr/module.py
-@@ -56,6 +56,22 @@ def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDoc
-     /docs/architecture/08_DATA_RULES_AND_ACCESS.MD.
-     """
+-### Input:
++### Input
+ - Raster image(s) produced by Stage 0 or explicitly supplied as standalone image files (PNG/JPEG/TIFF only)
+-- Each image must be referenced by **relpath under resolved `DATA_ROOT`** (or under an explicitly configured image root, if you later separate raw vs normalized roots)
++- Each image must be referenced by **relpath under resolved** `DATA_ROOT`  
++  (or under an explicitly configured image root, if you later separate raw vs normalized roots)
  
-+    if image_relpath.strip().lower().endswith(".pdf"):
-+        return OcrDocumentResult(
-+            ok=False,
-+            engine=config.engine,
-+            source_image_relpath=image_relpath,
-+            pages=[],
-+            errors=[
-+                OcrError(
-+                    code="OCR_INPUT_IS_PDF",
-+                    message="Stage 1 OCR rejects PDF inputs; PDFs must be normalized to images in Stage 0.",
-+                    detail={"source_image_relpath": image_relpath},
-+                )
-+            ],
-+            meta={"confidence_floor": config.confidence_floor},
-+        )
+-### Output:
++### Output (per token)
++- `token_id` (stable, unique within document)
+ - Token text (string)
+-- Bounding box (absolute coordinates)
++- Bounding box (absolute coordinates in page image space)
+ - Confidence score (0–1)
+-- Page number
++- `page_num`
+ 
+-### Constraints:
++### Constraints
+ - **Stage 1 MUST reject PDFs and all non-image inputs**
+-- No spelling correction
+-- No merging
+-- No inference
+-- No filtering except confidence floor
++- No spelling correction  
++- No merging  
++- No inference  
++- No filtering except confidence floor (if applied, it must be explicit and deterministic)
+ 
+ ---
+ 
+-# Stage 2: Structural Grouping
++# Stage 2: Structural Grouping (Deterministic)
+ 
+-### Input:
+-- OCR tokens + geometry
++### Input
++- OCR tokens + geometry (+ confidence) from Stage 1
+ 
+-### Output:
+-- Regions labeled as:
++### Output
++Stage 2 MUST emit **document primitive** and MAY emit **region candidates**.  
++All outputs must be deterministic and traceable to token IDs.
 +
-     try:
-         image_file = resolve_under_data_root(data_root=config.data_root, relpath=image_relpath)
-     except DataAccessError as e:
++**1. Primitives (required)**
++- `lines`: groups of tokens that form a single line of text
++    - Each line contains an ordered list of `token_id`s
++    - Each line has a `line_bbox`
++
++- `blocks`: groups of lines that form a coherent text block
++    - Each block contains an ordered list of `line_id`s (or directly `token_ids`)
++    - Each block has a `block_bbox`
++
++- Deterministic **reading order** must be defined for:
++    - tokens within a line  
++    - lines within a block  
++    - blocks within a page  
++
++**2. Region candidates (optional but recommended)**
++- `Regions`: higher-level structural clusters labeled as:
+     - TITLE_BLOCK
+-    - TABLE
++    - TABLE_LIKE
+     - NOTE
+     - ANNOTATION
+     - UNKNOWN
+-- Each region contains:
+-    - Ordered OCR tokens
+-    - Region bounding box
+-
+-### Constraints:
+-- Deterministic
+-- Spatial heuristics only
+-- Conservative over-grouping allowed
+-- No semantic labeling of content
++- Each region contains ordered `block_id`s (or `line_id`s) and a `region_bbox`.
++
++3. **Optional structural hints (allowed)**
++- `cell_candidates` / `box_candidates`: rectangular groupings likely representing boxed fields or table cells  
++  - MUST be based on geometry only (e.g., boxed boundaries if available, token containment, alignment, spacing heuristics)  
++  - May be emitted with conservative scoring  
++  - May contain ordered `token_id`s or `line_id`s
++
++### Determinism requirements
++- No randomness  
++- No ML model calls  
++- Every grouping decision must be reproducible from:
++  - token geometry  
++  - token text length (optional)  
++  - confidence (optional as a threshold only, not as a probabilistic weight)
++
++### Constraints
++- Deterministic  
++- Spatial heuristics only  
++- Conservative over-grouping allowed  
++- No semantic labeling of content (no field extraction, no interpreting “meaning”)  
++- Region labels MUST be structural only (e.g., location, bounding boxes, alignment patterns), not content-derived
+ 
+ ---
+ 
+diff --git a/docs/architecture/03_MODULE_CONTRACTS.md b/docs/architecture/03_MODULE_CONTRACTS.md
+index 0a75a9f..a52e6d3 100644
+--- a/docs/architecture/03_MODULE_CONTRACTS.md
++++ b/docs/architecture/03_MODULE_CONTRACTS.md
+@@ -30,16 +30,34 @@
+ 
+ ---
+ 
+-# Stage 2 - Structural Grouping
++# Stage 2 - Structural Grouping (Deterministic)
+ 
+-### Responsibilities
+-- Spatial clustering  
+-- Region labeling (structural only)  
++### Responsibilities:
++- Deterministically group OCR tokens into **lines** (token → line)
++- Deterministically group lines into **blocks** (line → block)
++- Produce a deterministic, well-defined **reading order**:
++    - tokens within each line
++    - lines within each block
++    - blocks within each page
++- Optionally cluster blocks into **region candidates** labeled structurally only:
++    - TITLE_BLOCK
++    - TABLE_LIKE
++    - NOTE
++    - ANNOTATION
++    - UNKNOWN
++Optionally emit **cell/box candidates** to support non-traditional tables (boxed key/value fields), using geometry-only heuristics and conservative scoring
+ 
+-### Explicitly NOT responsible for
+-- Field extraction  
+-- Content interpretation  
+-- Value guessing  
++### Explicitly NOT responsible for:
++- Field extraction
++- Content interpretation
++- Value guessing
++- OCR correction
++- Inferring missing text
++- Using ML models, classifiers, or probabilistic selection
++
++### Notes:
++- Over-grouping is allowed if deterministic and auditable.
++- Region labels (if emitted) must be derived from layout/geometry patterns only (e.g., location, alignment, boxing), not from text meaning.  
+ 
+ ---
+ 
+@@ -79,4 +97,4 @@ LLM output outside schema is invalid.
+ ### Explicitly NOT responsible for:
+ - Introducing new values
+ - Selecting "best" answers under disagreement
+-- Overring schema constraints
++- Overriding schema constraints
+diff --git a/docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md b/docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md
+index a7aaf8c..694d2fe 100644
+--- a/docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md
++++ b/docs/architecture/07_FAILURE_MODES_AND_AUDITABILITY.md
+@@ -3,6 +3,7 @@
+ - Partial tables
+ - Over-grouped regions
+ - Null-heavy output
++- Incorrect region labeling (so long as primitives, ordering, and evidence traceability remain correct)
+ 
+ ---
+ 
+@@ -15,7 +16,9 @@
+ ---
+ 
+ # Audit Requirements
+-- Every extracted value must be traceable to:
++Every extracted value must be traceable to:
+ - OCR token IDs
+-- Region IDs
++- Line IDs (Stage 2)
++- Block IDs (Stage 2)
++- Region IDs (Stage 2, if regions are emitted)
+ - Interpretation pass ID
+\ No newline at end of file
