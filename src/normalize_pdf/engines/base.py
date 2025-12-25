@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from normalize_pdf.contracts import ColorMode
+from ..contracts import ColorMode
 
 
 @dataclass(frozen=True, slots=True)

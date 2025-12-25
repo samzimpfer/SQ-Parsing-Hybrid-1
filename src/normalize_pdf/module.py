@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from normalized_pdf.engines import Pypdfium2Engine
+from .engines import Pypdfium2Engine
 
 from .contracts import (
     NormalizeEngineName,
