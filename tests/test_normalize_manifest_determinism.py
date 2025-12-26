@@ -48,6 +48,11 @@ class _FakeEngine:
         return rendered, {"backend": self.backend_id(), "backend_version": self.backend_version()}
 
 
+class _FakeEngineOnePage(_FakeEngine):
+    def get_page_count(self, *, pdf_file: Path) -> int:
+        return 1
+
+
 class TestNormalizeManifestDeterminism(unittest.TestCase):
     def test_manifest_bytes_stable_across_runs(self) -> None:
         # Arrange: Stage 0 requires outputs under the repo root for auditability.
@@ -92,6 +97,37 @@ class TestNormalizeManifestDeterminism(unittest.TestCase):
         self.assertTrue(d["pages"][0]["image_relpath"].endswith("/page_001.png"))
         self.assertEqual(d["pages"][0]["bbox_space"]["width_px"], 101)
         self.assertEqual(d["pages"][0]["bbox_space"]["height_px"], 201)
+
+    def test_one_page_manifest_has_single_page_entry(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        out_root = repo_root / "artifacts" / "_test_normalize_one_page"
+        if out_root.exists():
+            shutil.rmtree(out_root)
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        tmp = Path("/tmp/sq_normalize_test")
+        tmp.mkdir(parents=True, exist_ok=True)
+        fake_pdf = tmp / "input.pdf"
+        fake_pdf.write_bytes(b"%PDF-FAKE%")
+
+        cfg = NormalizePdfConfig(
+            data_root=tmp,
+            out_root=out_root,
+            dpi=300,
+            color_mode=ColorMode.RGB,
+            page_selection=None,
+            compute_source_sha256=False,
+        )
+
+        with patch("normalize_pdf.module.resolve_under_data_root", return_value=fake_pdf), patch(
+            "normalize_pdf.module._get_engine", return_value=_FakeEngineOnePage()
+        ):
+            r: NormalizePdfResult = run_normalize_pdf_relpath(config=cfg, pdf_relpath="input.pdf")
+
+        self.assertTrue(r.ok)
+        d = json.loads(serialize_normalize_result(r))
+        self.assertEqual([p["page_num"] for p in d["pages"]], [1])
+        self.assertTrue(d["pages"][0]["image_relpath"].endswith("/page_001.png"))
 
     def test_out_root_outside_repo_fails_deterministically(self) -> None:
         tmp = Path("/tmp/sq_normalize_test")
