@@ -26,10 +26,7 @@ The OCR module takes a `--data-root` path explicitly and loads images only via *
 ---
 
 ## Supported document inputs
-- PDF (via Stage 0)
-- Raster images (PNG/JPEG/TIFF) directly
-
-OCR does not accept PDFs
+- **PDF only** (via Stage 0)
 
 ---
 
@@ -37,11 +34,59 @@ OCR does not accept PDFs
 
 ### Current status
 
-Stage 0 (PDF normalization) is implemented (see `src/normalize_pdf/`).
-
-The full pipeline is not wired end-to-end in this repo yet. For now, you can run **Stage 1 (OCR)** to generate an auditable JSON artifact that downstream stages will consume later.
+Stages **0–2** are runnable as a **doc-first PDF pipeline** (single-page and multi-page PDFs use the same flow).
 
 Stages 3–4 are not yet implemented.
+
+---
+
+## Run the pipeline (PDF input; works for 1+ pages)
+
+### Stage 0 — Normalize PDF → images + manifest
+
+```bash
+python3 -m normalize_pdf.cli \
+  --data-root "/absolute/path/to/your/DATA_ROOT" \
+  --pdf-relpath "drawings/example.pdf" \
+  --out-root "artifacts/normalized" \
+  --out-manifest "artifacts/normalized/example.normalize.json" \
+  --dpi 300 \
+  --color-mode rgb
+```
+
+Outputs:
+- Images under `artifacts/normalized/<doc_id>/page_###.png`
+- Manifest JSON at `--out-manifest` (repo-root-relative `pages[].image_relpath`)
+
+### Stage 1 — OCR (doc mode) → per-page OCR artifacts + OCR doc ledger
+
+```bash
+python3 -m ocr.cli \
+  --normalize-manifest "artifacts/normalized/example.normalize.json" \
+  --out-dir "artifacts/ocr" \
+  --out-doc "artifacts/ocr/example.ocr_doc.json" \
+  --confidence-floor 0.0
+```
+
+Outputs:
+- Per-page OCR JSON under `artifacts/ocr/<doc_id>/page_###.ocr.json`
+- OCR doc ledger at `--out-doc` (repo-root-relative `pages[].ocr_out_relpath`)
+
+### Stage 2 — Grouping (doc mode) → per-page grouping artifacts + grouping doc ledger
+
+```bash
+python3 -m grouping.cli \
+  --ocr-doc-ledger "artifacts/ocr/example.ocr_doc.json" \
+  --out-dir "artifacts/grouping" \
+  --out-doc "artifacts/grouping/example.group_doc.json"
+```
+
+Outputs:
+- Per-page grouping JSON under `artifacts/grouping/<doc_id>/page_###.group.json`
+- Grouping doc ledger at `--out-doc` (repo-root-relative `pages[].group_out_relpath`)
+
+Notes:
+- Single-page PDFs are treated as documents with one page; there is **no** separate single-page mode.
 
 ---
 
@@ -90,31 +135,10 @@ python3 -m pip install -U pip
 python3 -m pip install -e .
 ```
 
-### Run OCR and write a JSON artifact
-
-You must provide:
-- `--data-root`: resolved filesystem directory containing your drawings/images
-- `--image-relpath`: image path **relative to** `--data-root`
-- `--out`: where to write the OCR JSON artifact
-
-Example:
+### Run OCR (document mode)
 
 ```bash
 python3 -m ocr.cli \
-  --data-root "/absolute/path/to/your/DATA_ROOT" \
-  --image-relpath "drawings/example_page_1.png" \
-  --out "artifacts/ocr/example_page_1.ocr.json" \
-  --confidence-floor 0.0
-```
-
-### Run OCR on a Stage 0 normalization manifest (document mode)
-
-This consumes a Stage 0 normalization manifest and produces:
-- per-page OCR artifacts under `--out-dir/<doc_id>/page_###.ocr.json`
-- an optional document-level OCR ledger (`--out-doc`) listing per-page outputs and errors
-
-```bash
-python3 -m ocr.cli_doc \
   --normalize-manifest "artifacts/normalized/example.normalize.json" \
   --out-dir "artifacts/ocr" \
   --out-doc "artifacts/ocr/example.ocr_doc.json" \
@@ -138,25 +162,13 @@ The OCR output is a stable, machine-readable JSON with:
 
 ## Run Stage 2 (Structural Grouping)
 
-Stage 2 groups Stage 1 OCR tokens into deterministic **lines** and **blocks** (and may emit conservative geometry-only regions).
+Stage 2 consumes the Stage 1 OCR doc ledger and groups OCR tokens into deterministic **lines** and **blocks** (geometry-only).
 Prerequisite: install the package editable (see Stage 1 install section).
 
 Example:
 
 ```bash
 python3 -m grouping.cli \
-  --input "artifacts/ocr/example_page_1.ocr.json" \
-  --output "artifacts/grouping/example_page_1.grouped.json"
-```
-
-### Run Stage 2 on a Stage 1 OCR document ledger (document mode)
-
-This consumes a Stage 1 OCR document ledger (from `python3 -m ocr.cli_doc`) and produces:
-- per-page grouping artifacts under `--out-dir/<doc_id>/page_###.group.json`
-- an optional document-level grouping ledger (`--out-doc`) listing per-page outputs and errors
-
-```bash
-python3 -m grouping.cli_doc \
   --ocr-doc-ledger "artifacts/ocr/example.ocr_doc.json" \
   --out-dir "artifacts/grouping" \
   --out-doc "artifacts/grouping/example.group_doc.json"
@@ -165,16 +177,15 @@ python3 -m grouping.cli_doc \
 ### Output format
 
 The grouped artifact contains per-page:
-- `lines[]` (ordered `token_ids` + `line_bbox`)
-- `blocks[]` (ordered `line_ids` + `block_bbox`)
-- optional `regions` (geometry-only, conservative)
-- `meta` with deterministic config + counts
+- `lines[]` (line bbox + token refs + deterministic `line_id`)
+- `blocks[]` (block bbox + ordered `line_ids` + deterministic `block_id`)
+- `meta` with deterministic params + version
 
 ---
 
 ## Implementation notes
 
 - OCR module code lives in `src/ocr/`
-- Primary API for pipeline integration: `ocr.module.run_ocr_on_image_relpath(config, image_relpath)`
+- Primary API for pipeline integration (doc-first): `ocr.doc_module.run_ocr_on_normalize_manifest(...)`
 - Backend: `tesseract` CLI TSV parsing (no correction/normalization/semantic filtering; only optional confidence floor)
 
