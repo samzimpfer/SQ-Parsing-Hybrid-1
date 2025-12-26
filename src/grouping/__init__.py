@@ -9,8 +9,7 @@ Implements Stage 2 contract in docs/architecture:
 No semantic interpretation, no OCR correction, no ML.
 """
 
-from .config import GroupingConfig
-from .group_tokens import group_ocr_result
+from .doc_module import run_group_on_ocr_doc_ledger
 
-__all__ = ["GroupingConfig", "group_ocr_result"]
+__all__ = ["run_group_on_ocr_doc_ledger"]
 
