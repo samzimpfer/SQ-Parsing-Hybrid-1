@@ -3,34 +3,36 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .artifacts import write_ocr_json_artifact
 from .contracts import OcrConfig
-from .module import run_ocr_on_image_relpath
+from .doc_module import run_ocr_on_normalize_manifest
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sq-ocr",
         description=(
-            "OCR (perception only): emit token text + bounding boxes + confidences as JSON."
+            "OCR (document mode, perception only): consume a Stage 0 normalization manifest and "
+            "emit per-page OCR artifacts (+ optional document-level index)."
         ),
     )
     p.add_argument(
-        "--data-root",
+        "--normalize-manifest",
         required=True,
         type=Path,
-        help="Resolved DATA_ROOT path (must be passed explicitly; no env reads).",
+        help="Stage 0 normalization manifest JSON (repo-root-relative or absolute under repo).",
     )
     p.add_argument(
-        "--image-relpath",
-        required=True,
-        help="Image path relative to --data-root.",
-    )
-    p.add_argument(
-        "--out",
+        "--out-dir",
         required=True,
         type=Path,
-        help="Output JSON artifact file path.",
+        help="Output directory for per-page OCR artifacts (must be under repo root).",
+    )
+    p.add_argument(
+        "--out-doc",
+        required=False,
+        type=Path,
+        default=None,
+        help="Optional output file path for the document-level OCR ledger (must be under repo root).",
     )
     p.add_argument(
         "--confidence-floor",
@@ -58,7 +60,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--compute-source-sha256",
         action="store_true",
-        help="Include SHA-256 of the source file in meta for auditing.",
+        help="Include SHA-256 of each source image in per-page meta for auditing.",
     )
     return p
 
@@ -66,8 +68,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
+    # Doc-first pipeline: OCR consumes Stage 0 normalized artifacts under repo root.
     config = OcrConfig(
-        data_root=args.data_root,
+        data_root=Path(__file__).resolve().parents[2].resolve(),
         confidence_floor=args.confidence_floor,
         language=args.language,
         psm=args.psm,
@@ -75,8 +78,13 @@ def main(argv: list[str] | None = None) -> int:
         compute_source_sha256=args.compute_source_sha256,
     )
 
-    result = run_ocr_on_image_relpath(config=config, image_relpath=args.image_relpath)
-    write_ocr_json_artifact(result=result, out_file=args.out)
+    result = run_ocr_on_normalize_manifest(
+        normalize_manifest=args.normalize_manifest,
+        out_dir=args.out_dir,
+        out_doc_manifest=args.out_doc,
+        config=config,
+    )
+    print(f"doc_id={result.doc_id or '<missing>'} pages={len(result.pages)} ok={result.ok}")
 
     return 0 if result.ok else 2
 

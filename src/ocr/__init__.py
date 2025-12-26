@@ -21,7 +21,8 @@ from .contracts import (
     OcrPageResult,
     OcrToken,
 )
-from .module import run_ocr_on_image_relpath
+from .doc_module import run_ocr_on_normalize_manifest
+from .module import run_ocr_on_image_file
 
 __all__ = [
     "BBox",
@@ -31,6 +32,7 @@ __all__ = [
     "OcrError",
     "OcrPageResult",
     "OcrToken",
-    "run_ocr_on_image_relpath",
+    "run_ocr_on_image_file",
+    "run_ocr_on_normalize_manifest",
 ]
 
