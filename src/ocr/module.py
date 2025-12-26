@@ -96,3 +96,21 @@ def run_ocr_on_image_relpath(*, config: OcrConfig, image_relpath: str) -> OcrDoc
     )
     return _attach_source_sha256_if_enabled(config=config, image_file=image_file, result=result)
 
+
+def run_ocr_on_image_file(
+    *, config: OcrConfig, image_file: Path, source_image_relpath: str | None
+) -> OcrDocumentResult:
+    """
+    Run OCR on an explicit image file path (no DATA_ROOT resolution).
+
+    This is intended for Stage 1 document-mode runs that consume Stage 0
+    normalized artifacts (repo-root-relative outputs) rather than raw inputs
+    under DATA_ROOT.
+    """
+
+    engine = _get_engine(config.engine)
+    result = engine.run_on_image_file(
+        config=config, image_file=image_file, source_relpath=source_image_relpath
+    )
+    return _attach_source_sha256_if_enabled(config=config, image_file=image_file, result=result)
+

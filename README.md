@@ -107,6 +107,20 @@ python3 -m ocr.cli \
   --confidence-floor 0.0
 ```
 
+### Run OCR on a Stage 0 normalization manifest (document mode)
+
+This consumes a Stage 0 normalization manifest and produces:
+- per-page OCR artifacts under `--out-dir/<doc_id>/page_###.ocr.json`
+- an optional document-level OCR ledger (`--out-doc`) listing per-page outputs and errors
+
+```bash
+python3 -m ocr.cli_doc \
+  --normalize-manifest "artifacts/normalized/example.normalize.json" \
+  --out-dir "artifacts/ocr" \
+  --out-doc "artifacts/ocr/example.ocr_doc.json" \
+  --confidence-floor 0.0
+```
+
 Optional flags:
 - `--compute-source-sha256`: include SHA-256 of the source image in `meta` (audit aid)
 - `--psm <int>`: tesseract page segmentation mode hint
