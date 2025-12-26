@@ -47,20 +47,22 @@ Stages 3–4 are not yet implemented.
 
 ## Run Stage 0 (Normalization)
 
-Stage 0 is the **only** place PDFs are handled. It renders a PDF into deterministic per-page raster images and emits a JSON manifest.
+Stage 0 is the **only** place PDFs are handled. It renders a PDF into deterministic per-page raster images and emits a document-level JSON manifest.
 
 ```bash
 python3 -m normalize_pdf.cli \
   --data-root "/absolute/path/to/your/DATA_ROOT" \
   --pdf-relpath "drawings/example.pdf" \
-  --out-root "/absolute/path/to/output_root" \
+  --out-root "artifacts/normalized" \
   --out-manifest "artifacts/normalized/example.normalize.json" \
   --dpi 300 \
   --color-mode rgb
 ```
 
 Notes:
-- Output images are written under `--out-root/<safe_pdf_id>/page_001.png`, `page_002.png`, ...
+- Output images are written under `--out-root/<doc_id>/page_001.png`, `page_002.png`, ...
+- `--out-root` must be a directory **under the repo** (e.g. `artifacts/normalized`) so `image_relpath` can be repo-root-relative and auditable.
+- The manifest includes `doc_id`, `source_pdf_relpath`, `rendering` params, and `pages[]` (`page_num`, `image_relpath`, `bbox_space.width_px/height_px`).
 - If `pypdfium2` is not installed, Stage 0 will return `ok=false` with an explicit error in the manifest.
 
 ---

@@ -11,7 +11,7 @@ from .module import run_normalize_pdf_relpath
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sq-normalize-pdf",
-        description="Stage 0: render PDF -> deterministic per-page images + JSON manifest.",
+        description="Stage 0: render PDF -> deterministic page images + document-level JSON manifest.",
     )
     p.add_argument("--data-root", required=True, type=Path, help="Resolved DATA_ROOT path.")
     p.add_argument("--pdf-relpath", required=True, help="PDF path relative to --data-root.")

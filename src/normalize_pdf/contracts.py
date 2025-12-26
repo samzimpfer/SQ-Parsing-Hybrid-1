@@ -29,17 +29,19 @@ class NormalizePdfError:
 @dataclass(frozen=True, slots=True)
 class NormalizePdfPage:
     page_num: int  # 1-indexed
-    image_relpath: str  # relative to out_root
-    width_px: int
-    height_px: int
+    image_relpath: str  # repo-root-relative relpath to the materialized page image
+    bbox_space: dict[str, int]  # {"width_px": int, "height_px": int}
 
 
 @dataclass(frozen=True, slots=True)
 class NormalizePdfResult:
+    # Deterministic identifier for this normalization output, stable for identical:
+    # (source_pdf_relpath + dpi + color_mode + backend identifier + page selection)
+    doc_id: str
     ok: bool
     engine: NormalizeEngineName
     source_pdf_relpath: str
-    render_params: dict[str, Any]
+    rendering: dict[str, Any]
     pages: list[NormalizePdfPage]
     errors: list[NormalizePdfError]
     meta: dict[str, Any]

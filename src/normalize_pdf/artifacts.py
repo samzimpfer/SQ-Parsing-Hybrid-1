@@ -9,7 +9,10 @@ from .contracts import NormalizePdfResult
 
 def serialize_normalize_result(result: NormalizePdfResult) -> str:
     payload: dict[str, Any] = result.to_dict()
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), indent=2)
+        + "\n"
+    )
 
 
 def write_normalize_manifest_json(*, result: NormalizePdfResult, out_manifest: Path) -> None:
