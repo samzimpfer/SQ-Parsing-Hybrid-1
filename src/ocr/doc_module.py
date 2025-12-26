@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import write_ocr_json_artifact
-from .contracts import OcrConfig, OcrDocumentResult, OcrError
+from .contracts import OcrConfig, OcrDocumentResult, OcrError, OcrPageResult, OcrToken
 from .doc_artifacts import write_ocr_doc_manifest_json
 from .doc_contracts import OcrDocPageRef, OcrDocResult
 from .module import run_ocr_on_image_file
@@ -33,6 +33,58 @@ def _resolve_under_repo_root(*, repo_root: Path, relpath: str) -> tuple[Path | N
                 detail={"image_relpath": relpath, "repo_root": str(repo_root), "resolved": str(out_file)},
             ),
         )
+
+
+def _rewrite_result_for_doc_page(
+    *, result: OcrDocumentResult, doc_page_num: int, source_image_relpath: str
+) -> OcrDocumentResult:
+    """
+    Doc-mode requires that per-page OCR artifacts use the *document* page_num.
+
+    Tesseract TSV page numbers are typically 1-indexed within a single image and
+    therefore always 1 for standalone images. In doc-mode, we rewrite:
+    - pages[0].page_num == doc_page_num
+    - every token.page_num == doc_page_num
+    - every token.token_id re-numbered deterministically with p{doc_page_num:03d}_t{idx:06d}
+
+    This avoids cross-page token_id collisions and allows Stage 2 doc-mode to
+    match ledger page_num to OCR artifact page_num deterministically.
+    """
+
+    # Keep failures as-is (pages typically empty; no hallucinated structure).
+    if not result.ok:
+        return result
+
+    # Flatten any returned pages' tokens deterministically (should typically be a single page).
+    toks: list[OcrToken] = []
+    for p in sorted(result.pages, key=lambda p: p.page_num):
+        toks.extend(p.tokens)
+
+    rewritten_tokens: list[OcrToken] = []
+    for idx, t in enumerate(toks):
+        rewritten_tokens.append(
+            OcrToken(
+                token_id=f"p{doc_page_num:03d}_t{idx:06d}",
+                page_num=doc_page_num,
+                text=t.text,
+                bbox=t.bbox,
+                confidence=t.confidence,
+                raw_confidence=t.raw_confidence,
+            )
+        )
+
+    pages_out: list[OcrPageResult] = []
+    if rewritten_tokens:
+        pages_out = [OcrPageResult(page_num=doc_page_num, tokens=rewritten_tokens)]
+
+    return OcrDocumentResult(
+        ok=result.ok,
+        engine=result.engine,
+        source_image_relpath=source_image_relpath,
+        pages=pages_out,
+        errors=result.errors,
+        meta=result.meta,
+    )
 
 
 def run_ocr_on_normalize_manifest(
@@ -356,6 +408,9 @@ def run_ocr_on_normalize_manifest(
             config=config,
             image_file=image_file,
             source_image_relpath=image_relpath,
+        )
+        page_result = _rewrite_result_for_doc_page(
+            result=page_result, doc_page_num=page_num, source_image_relpath=image_relpath
         )
         write_ocr_json_artifact(result=page_result, out_file=out_file)
 

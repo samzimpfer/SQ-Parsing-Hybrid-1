@@ -111,6 +111,69 @@ class TestOcrDocFromNormalizeManifest(unittest.TestCase):
         self.assertTrue(r1.pages[0].ocr_out_relpath.endswith("/page_001.ocr.json"))
         self.assertTrue(r1.pages[1].ocr_out_relpath.endswith("/page_002.ocr.json"))
 
+    def test_doc_mode_page_num_propagated_to_per_page_artifacts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        root = repo_root / "artifacts" / "_test_ocr_doc_page_nums"
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+
+        doc_id = "doc_test_abc"
+        out_dir_doc = repo_root / "artifacts" / "ocr" / doc_id
+        if out_dir_doc.exists():
+            shutil.rmtree(out_dir_doc)
+
+        (root / doc_id).mkdir(parents=True, exist_ok=True)
+        for n in (1, 2, 3):
+            (root / doc_id / f"page_{n:03d}.png").write_bytes(b"")
+
+        norm_manifest = root / "norm.json"
+        norm_manifest.write_text(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "pages": [
+                        {
+                            "page_num": 1,
+                            "image_relpath": f"artifacts/_test_ocr_doc_page_nums/{doc_id}/page_001.png",
+                            "bbox_space": {"width_px": 10, "height_px": 10},
+                        },
+                        {
+                            "page_num": 2,
+                            "image_relpath": f"artifacts/_test_ocr_doc_page_nums/{doc_id}/page_002.png",
+                            "bbox_space": {"width_px": 10, "height_px": 10},
+                        },
+                        {
+                            "page_num": 3,
+                            "image_relpath": f"artifacts/_test_ocr_doc_page_nums/{doc_id}/page_003.png",
+                            "bbox_space": {"width_px": 10, "height_px": 10},
+                        },
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        cfg = OcrConfig(data_root=repo_root)
+        with patch("ocr.module._get_engine", return_value=_FakeEngine()):
+            r = run_ocr_on_normalize_manifest(
+                normalize_manifest=norm_manifest.relative_to(repo_root),
+                out_dir=Path("artifacts/ocr"),
+                out_doc_manifest=root / "ocr_doc.json",
+                config=cfg,
+            )
+
+        self.assertTrue(r.ok)
+        for n in (1, 2, 3):
+            ocr_file = repo_root / "artifacts" / "ocr" / doc_id / f"page_{n:03d}.ocr.json"
+            d = json.loads(ocr_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(d["pages"]), 1)
+            self.assertEqual(d["pages"][0]["page_num"], n)
+            self.assertTrue(d["source_image_relpath"].endswith(f"page_{n:03d}.png"))
+
     def test_invalid_page_entries_fail_document_without_outputs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         root = repo_root / "artifacts" / "_test_ocr_doc_invalid_pages"

@@ -149,6 +149,19 @@ python3 -m grouping.cli \
   --output "artifacts/grouping/example_page_1.grouped.json"
 ```
 
+### Run Stage 2 on a Stage 1 OCR document ledger (document mode)
+
+This consumes a Stage 1 OCR document ledger (from `python3 -m ocr.cli_doc`) and produces:
+- per-page grouping artifacts under `--out-dir/<doc_id>/page_###.group.json`
+- an optional document-level grouping ledger (`--out-doc`) listing per-page outputs and errors
+
+```bash
+python3 -m grouping.cli_doc \
+  --ocr-doc-ledger "artifacts/ocr/example.ocr_doc.json" \
+  --out-dir "artifacts/grouping" \
+  --out-doc "artifacts/grouping/example.group_doc.json"
+```
+
 ### Output format
 
 The grouped artifact contains per-page:
