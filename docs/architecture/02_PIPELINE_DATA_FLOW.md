@@ -5,20 +5,21 @@
 - Optional: explicit page selection parameters (e.g., all pages by default)
 
 ### Output
-- A deterministically ordered list of raster image outputs, one per page:
-    - `page_num` (1-indexed, matching PDF page order)
-    - `image_relpath` (relpath under an explicitly configured output root, e.g. `artifacts/normalized/...`)
-    - `bbox_space` definition: pixel coordinate space for that image (implicit via width/height)
+- A **document-level normalization manifest** plus materialized per-page raster images.
 
-- Deterministic file naming
-    - `page_001.png`, `page_002.png`, … (or equivalent zero-padded scheme)
+**Manifest (required)**
+- `doc_id` (stable, deterministic identifier for this PDF normalization output)
+- `source_pdf_relpath` (input PDF relpath under resolved `DATA_ROOT`)
+- `rendering` (audit metadata; deterministic):
+  - `dpi`, `color_mode`, backend/tool identifier, optional `source_sha256`
+- `pages`: a deterministically ordered list of page entries (1-indexed, PDF order):
+  - `page_num`
+  - `image_relpath` (relpath under an explicitly configured output root, e.g. `artifacts/normalized/<doc_id>/page_001.png`)
+  - `bbox_space`: pixel coordinate space for that page image (implicit via image width/height)
 
-- Optional audit metadata
-    - source PDF relpath  
-    - rendering parameters (dpi, color mode)  
-    - tool/backend identifier  
-    - optional source_sha256
-
+**Images (required)**
+- Deterministic file naming:
+  - `page_001.png`, `page_002.png`, … (or equivalent zero-padded scheme)
 - Normalized images MUST be materialized as files (not transient in-memory objects) to preserve auditability and reproducibility.
 
 ### Constraints
@@ -37,22 +38,35 @@
 # Stage 1: OCR Output Contract
 
 ### Input
-- Raster image(s) produced by Stage 0 or explicitly supplied as standalone image files (PNG/JPEG/TIFF only)
-- Each image must be referenced by **relpath under resolved** `DATA_ROOT`  
-  (or under an explicitly configured image root, if you later separate raw vs normalized roots)
+Stage 1 supports two deterministic input modes:
 
-### Output (per token)
-- `token_id` (stable, unique within document)
-- Token text (string)
-- Bounding box (absolute coordinates in page image space)
-- Confidence score (0–1)
-- `page_num`
+**A) Document mode (recommended for PDFs)**
+- Stage 0 normalization manifest (document-level)
+- For each entry in `manifest.pages[]`, OCR is run on `image_relpath` (relpath under resolved `DATA_ROOT`)
+
+**B) Single-image mode (standalone images)**
+- One raster image file (PNG/JPEG/TIFF only) referenced by `image_relpath` (relpath under resolved `DATA_ROOT`)
+
+### Output
+Stage 1 MUST emit a **document-level OCR artifact** with explicit page structure:
+
+**Document-level output (required in document mode, allowed in single-image mode)**
+- `pages[]`: one entry per page:
+  - `page_num`
+  - `tokens[]`: list of OCR tokens for that page
+
+**Per token**
+- `token_id` (stable, unique within document; MUST encode `page_num` for uniqueness)
+- `page_num` (1-indexed, matches Stage 0 page numbering)
+- `text` (literal OCR output; may be empty/whitespace)
+- `bbox` (absolute pixel coordinates in that page's image space)
+- `confidence` (0–1 or null)
 
 ### Constraints
-- **Stage 1 MUST reject PDFs and all non-image inputs**
-- No spelling correction  
-- No merging  
-- No inference  
+- Stage 1 MUST reject PDFs and all non-image inputs (PDF handling is Stage 0 only)
+- No spelling correction
+- No merging
+- No inference
 - No filtering except confidence floor (if applied, it must be explicit and deterministic)
 
 ---
@@ -60,11 +74,11 @@
 # Stage 2: Structural Grouping (Deterministic)
 
 ### Input
-- OCR tokens + geometry (+ confidence) from Stage 1
+- Document-level OCR artifact from Stage 1 (`pages[]` with tokens per page)
 
 ### Output
 Stage 2 MUST emit **document primitives** and MAY emit **region candidates**.  
-All outputs must be deterministic and traceable to token IDs.
+All outputs must be deterministic and traceable to token IDs. Stage 2 MUST preserve the document's `pages[]` structure. Grouping is performed per page, but emitted as a single document-level artifact.
 
 **1. Primitives (required)**
 - `lines`: groups of tokens that form a single line of text

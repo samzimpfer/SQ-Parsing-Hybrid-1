@@ -4,6 +4,11 @@
 - Render PDF documents to page-level raster images deterministically
 - Preserve page ordering and page index exactly
 - Emit materialized image files suitable for direct OCR input
+- Emit a **document-level normalization manifest** containing:
+  - `doc_id`
+  - `pages[]` with (`page_num`, `image_relpath`)
+  - deterministic rendering/audit metadata
+
 
 ### Explicitly NOT responsible for:
 - OCR
@@ -18,21 +23,29 @@
 # Stage 1 - OCR (Perception only)
 
 ### Responsibilities
-- Text detection  
-- Bounding boxes  
-- Confidence scoring  
+- Text detection
+- Bounding boxes
+- Confidence scoring
+- Support two deterministic execution modes:
+  - **Document mode**: consume Stage 0 normalization manifest and OCR all `pages[]`
+  - **Single-image mode**: OCR one specified image relpath
+- Emit a **document-level OCR artifact** with `pages[]` and `tokens[]` per page
+  - Tokens MUST include `page_num`
+  - `token_id` MUST be stable and unique within the document (recommended: include `page_num` prefix)
 
 ### Explicitly NOT responsible for
-- Correction  
-- Normalization  
-- Semantic understanding  
-- PDF handling or inspection
+- Correction
+- Normalization
+- Semantic understanding
+- PDF handling or inspection (Stage 0 only)
+- Inferring page count/page order (must be driven by Stage 0 manifest in document mode)
 
 ---
 
 # Stage 2 - Structural Grouping (Deterministic)
 
 ### Responsibilities:
+- Consume a **document-level** Stage 1 OCR artifact (`pages[]`) and emit a **document-level** Stage 2 grouping artifact preserving `pages[]`
 - Deterministically group OCR tokens into **lines** (token → line)
 - Deterministically group lines into **blocks** (line → block)
 - Produce a deterministic, well-defined **reading order**:
