@@ -502,6 +502,7 @@ class TestGroupingDocFromOcrDocLedger(unittest.TestCase):
         d = json.loads(out_file.read_text(encoding="utf-8"))
         self.assertFalse(d["ok"])
         self.assertEqual(d["errors"][0]["code"], "GROUP_OCR_PAGE_NUM_MISMATCH")
+        self.assertEqual(d["meta"]["version"], "lines_blocks_v1")
 
     def test_out_dir_outside_repo_rejected(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

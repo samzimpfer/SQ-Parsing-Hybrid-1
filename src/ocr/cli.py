@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
     # Doc-first pipeline: OCR consumes Stage 0 normalized artifacts under repo root.
+    # Note: OcrConfig still has a `data_root` field for legacy structure; in doc-first
+    # mode we set it to repo_root for deterministic, auditable artifact resolution.
     config = OcrConfig(
         data_root=Path(__file__).resolve().parents[2].resolve(),
         confidence_floor=args.confidence_floor,

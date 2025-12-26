@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import write_group_json_artifact
+from .config_doc import GroupingConfigDoc
 from .doc_artifacts import write_group_doc_manifest_json
 from contracts.grouping_doc_mode import (
     GroupBBox,
@@ -22,6 +23,10 @@ def _repo_root() -> Path:
 
 
 _GROUPING_VERSION = "lines_blocks_v1"
+
+
+def _stable_json(x: Any) -> str:
+    return json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _median_int(values: list[int]) -> int:
@@ -42,7 +47,13 @@ def _bbox_from_dict(d: dict[str, Any]) -> GroupBBox | None:
         return None
 
 
-def group_tokens_into_lines(*, tokens: list[GroupTokenRef], page_num: int) -> tuple[list[GroupLine], dict[str, Any]]:
+def _compute_line_y_tol_px(*, cfg: GroupingConfigDoc, median_token_height_px: int) -> int:
+    return max(int(cfg.min_line_y_tol_px), int(max(0, cfg.line_y_tol_k) * int(median_token_height_px)))
+
+
+def group_tokens_into_lines(
+    *, tokens: list[GroupTokenRef], page_num: int, cfg: GroupingConfigDoc
+) -> tuple[list[GroupLine], dict[str, Any]]:
     """
     Deterministic token -> line grouping.
 
@@ -54,7 +65,7 @@ def group_tokens_into_lines(*, tokens: list[GroupTokenRef], page_num: int) -> tu
 
     heights = [max(1, t.bbox.y1 - t.bbox.y0) for t in tokens_sorted]
     h_med = _median_int(heights)
-    line_y_tol = max(2, int(0.5 * h_med))
+    line_y_tol = _compute_line_y_tol_px(cfg=cfg, median_token_height_px=h_med)
 
     # Each line keeps a reference y0 from its first token.
     line_bins: list[dict[str, Any]] = []
@@ -68,16 +79,37 @@ def group_tokens_into_lines(*, tokens: list[GroupTokenRef], page_num: int) -> tu
         if not placed:
             line_bins.append({"ref_y0": int(t.bbox.y0), "tokens": [t]})
 
+    # Refinement pass: deterministically split bins that captured multiple baselines.
+    refined_bins: list[dict[str, Any]] = []
+    for lb in line_bins:
+        bin_tokens = sorted(lb["tokens"], key=lambda t: (t.bbox.x0, t.token_id))
+        bin_heights = [max(1, t.bbox.y1 - t.bbox.y0) for t in bin_tokens]
+        bin_h_med = _median_int(bin_heights)
+        bin_tol = _compute_line_y_tol_px(cfg=cfg, median_token_height_px=bin_h_med)
+
+        subbins: list[dict[str, Any]] = []
+        for t in sorted(bin_tokens, key=lambda t: (t.bbox.y0, t.bbox.x0, t.token_id)):
+            placed = False
+            for sb in subbins:
+                if abs(int(t.bbox.y0) - int(sb["ref_y0"])) <= bin_tol:
+                    sb["tokens"].append(t)
+                    placed = True
+                    break
+            if not placed:
+                subbins.append({"ref_y0": int(t.bbox.y0), "tokens": [t]})
+
+        refined_bins.extend(subbins)
+
     # Build line records without IDs, then sort and assign IDs in that sorted order.
     line_recs: list[dict[str, Any]] = []
-    for lb in line_bins:
+    for lb in refined_bins:
         line_tokens: list[GroupTokenRef] = sorted(lb["tokens"], key=lambda t: (t.bbox.x0, t.token_id))
         x0 = min(t.bbox.x0 for t in line_tokens)
         y0 = min(t.bbox.y0 for t in line_tokens)
         x1 = max(t.bbox.x1 for t in line_tokens)
         y1 = max(t.bbox.y1 for t in line_tokens)
         bbox = GroupBBox(x0=x0, y0=y0, x1=x1, y1=y1)
-        text = " ".join(t.text for t in line_tokens)
+        text = "" if not cfg.include_text_fields else " ".join(t.text for t in line_tokens)
         first_token_id = line_tokens[0].token_id if line_tokens else ""
         line_recs.append({"bbox": bbox, "tokens": line_tokens, "text": text, "tiebreak": first_token_id})
 
@@ -96,7 +128,7 @@ def group_tokens_into_lines(*, tokens: list[GroupTokenRef], page_num: int) -> tu
             )
         )
 
-    return lines, {"median_token_height_px": h_med, "line_y_tol_px": line_y_tol}
+    return lines, {"median_token_height_px": h_med, "line_y_tol_px": line_y_tol, "refined_bins": len(refined_bins)}
 
 
 def _h_overlap_ratio(a: GroupBBox, b: GroupBBox) -> float:
@@ -106,7 +138,9 @@ def _h_overlap_ratio(a: GroupBBox, b: GroupBBox) -> float:
     return float(overlap) / float(min(w_a, w_b))
 
 
-def group_lines_into_blocks(*, lines: list[GroupLine], page_num: int) -> tuple[list[GroupBlock], dict[str, Any]]:
+def group_lines_into_blocks(
+    *, lines: list[GroupLine], page_num: int, cfg: GroupingConfigDoc
+) -> tuple[list[GroupBlock], dict[str, Any]]:
     """
     Deterministic line -> block grouping (geometry-only, conservative).
 
@@ -124,10 +158,8 @@ def group_lines_into_blocks(*, lines: list[GroupLine], page_num: int) -> tuple[l
         gaps.append(max(0, int(cur.bbox.y0) - int(prev.bbox.y1)))
     med_gap = _median_int(gaps) if gaps else 0
 
-    # Conservative, geometry-only threshold: scale by median line height.
-    # (Using the median gap itself as a threshold can collapse blocks on sparse pages.)
-    gap_threshold = max(2, int(1.5 * med_h))
-    overlap_threshold = 0.1
+    gap_threshold = max(int(cfg.min_block_gap_px), int(cfg.block_gap_k * med_h))
+    overlap_threshold = float(cfg.block_overlap_threshold)
 
     block_bins: list[list[GroupLine]] = []
     current: list[GroupLine] = [lines[0]]
@@ -149,7 +181,7 @@ def group_lines_into_blocks(*, lines: list[GroupLine], page_num: int) -> tuple[l
         y1 = max(l.bbox.y1 for l in b)
         bbox = GroupBBox(x0=x0, y0=y0, x1=x1, y1=y1)
         line_ids = [l.line_id for l in b]
-        text = "\n".join(l.text for l in b)
+        text = "" if not cfg.include_text_fields else "\n".join(l.text for l in b)
         block_recs.append({"bbox": bbox, "line_ids": line_ids, "text": text, "tiebreak": line_ids[0]})
 
     block_recs.sort(key=lambda r: (r["bbox"].y0, r["bbox"].x0, r["tiebreak"]))
@@ -175,13 +207,89 @@ def group_lines_into_blocks(*, lines: list[GroupLine], page_num: int) -> tuple[l
     }
 
 
+def _repair_bbox(*, bbox: GroupBBox) -> GroupBBox:
+    x0 = min(bbox.x0, bbox.x1)
+    x1 = max(bbox.x0, bbox.x1)
+    y0 = min(bbox.y0, bbox.y1)
+    y1 = max(bbox.y0, bbox.y1)
+    return GroupBBox(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def _bbox_area(b: GroupBBox) -> int:
+    w = max(0, b.x1 - b.x0)
+    h = max(0, b.y1 - b.y0)
+    return int(w * h)
+
+
+def _preprocess_tokens(
+    *, tokens: list[GroupTokenRef], cfg: GroupingConfigDoc
+) -> tuple[list[GroupTokenRef], list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Returns: (tokens_used, dropped_tokens, warnings)
+    """
+
+    dropped: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    used: list[GroupTokenRef] = []
+
+    for t in tokens:
+        if cfg.drop_whitespace_tokens and t.text.strip() == "":
+            dropped.append({"token_id": t.token_id, "reason": "WHITESPACE"})
+            continue
+
+        if cfg.confidence_floor > 0.0 and t.confidence is not None and float(t.confidence) < cfg.confidence_floor:
+            dropped.append({"token_id": t.token_id, "reason": "BELOW_CONFIDENCE_FLOOR"})
+            continue
+
+        bbox = t.bbox
+        if cfg.repair_bboxes:
+            repaired = _repair_bbox(bbox=bbox)
+            if repaired != bbox:
+                warnings.append(
+                    {
+                        "code": "GROUP_BBOX_REPAIRED",
+                        "message": "Token bbox endpoints were swapped deterministically",
+                        "detail": {
+                            "token_id": t.token_id,
+                            "before": {"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1},
+                            "after": {
+                                "x0": repaired.x0,
+                                "y0": repaired.y0,
+                                "x1": repaired.x1,
+                                "y1": repaired.y1,
+                            },
+                        },
+                    }
+                )
+            bbox = repaired
+
+        if _bbox_area(bbox) <= 0:
+            dropped.append({"token_id": t.token_id, "reason": "BBOX_ZERO_AREA"})
+            continue
+
+        used.append(
+            GroupTokenRef(
+                token_id=t.token_id,
+                text=t.text,
+                bbox=bbox,
+                confidence=t.confidence,
+            )
+        )
+
+    # Canonicalize deterministically.
+    dropped.sort(key=lambda x: (str(x.get("token_id", "")), str(x.get("reason", ""))))
+    warnings.sort(key=lambda w: (str(w.get("code", "")), str(w.get("message", "")), _stable_json(w.get("detail"))))
+    return used, dropped, warnings
+
 def run_group_on_ocr_doc_ledger(
     *,
     ocr_doc_ledger: Path,
     out_dir: Path,
     out_doc_manifest: Path | None,
+    config: GroupingConfigDoc | None = None,
 ) -> GroupDocResult:
     repo_root = _repo_root()
+    cfg = GroupingConfigDoc() if config is None else config
 
     ledger_file = ocr_doc_ledger
     if not ledger_file.is_absolute():
@@ -634,7 +742,28 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta={
+                    "stage": 2,
+                    "mode": "page",
+                    "algorithm": "lines_blocks_v1",
+                    "version": _GROUPING_VERSION,
+                    "params": {
+                        "confidence_floor": cfg.confidence_floor,
+                        "drop_whitespace_tokens": cfg.drop_whitespace_tokens,
+                        "repair_bboxes": cfg.repair_bboxes,
+                        "line_y_tol_k": cfg.line_y_tol_k,
+                        "min_line_y_tol_px": cfg.min_line_y_tol_px,
+                        "block_gap_k": cfg.block_gap_k,
+                        "min_block_gap_px": cfg.min_block_gap_px,
+                        "block_overlap_threshold": cfg.block_overlap_threshold,
+                        "include_text_fields": cfg.include_text_fields,
+                        "emit_regions": cfg.emit_regions,
+                    },
+                    "derived": {},
+                    "counts": {"tokens_in": len(token_refs), "tokens_used": 0, "lines": 0, "blocks": 0, "dropped_tokens_count": 0, "warnings_count": 0},
+                    "dropped_tokens": [],
+                    "warnings": [],
+                },
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -648,8 +777,9 @@ def run_group_on_ocr_doc_ledger(
             )
             continue
 
-        lines, line_meta = group_tokens_into_lines(tokens=token_refs, page_num=page_num)
-        blocks, block_meta = group_lines_into_blocks(lines=lines, page_num=page_num)
+        tokens_used, dropped_tokens, warnings = _preprocess_tokens(tokens=token_refs, cfg=cfg)
+        lines, line_meta = group_tokens_into_lines(tokens=tokens_used, page_num=page_num, cfg=cfg)
+        blocks, block_meta = group_lines_into_blocks(lines=lines, page_num=page_num, cfg=cfg)
         page_result = GroupPageResult(
             ok=True,
             page_num=page_num,
@@ -662,8 +792,29 @@ def run_group_on_ocr_doc_ledger(
                 "mode": "page",
                 "algorithm": "lines_blocks_v1",
                 "version": _GROUPING_VERSION,
-                "line_params": {"line_y_tol_k": 0.5, **line_meta},
-                "block_params": {**block_meta},
+                "params": {
+                    "confidence_floor": cfg.confidence_floor,
+                    "drop_whitespace_tokens": cfg.drop_whitespace_tokens,
+                    "repair_bboxes": cfg.repair_bboxes,
+                    "line_y_tol_k": cfg.line_y_tol_k,
+                    "min_line_y_tol_px": cfg.min_line_y_tol_px,
+                    "block_gap_k": cfg.block_gap_k,
+                    "min_block_gap_px": cfg.min_block_gap_px,
+                    "block_overlap_threshold": cfg.block_overlap_threshold,
+                    "include_text_fields": cfg.include_text_fields,
+                    "emit_regions": cfg.emit_regions,
+                },
+                "derived": {**line_meta, **block_meta},
+                "counts": {
+                    "tokens_in": len(token_refs),
+                    "tokens_used": len(tokens_used),
+                    "lines": len(lines),
+                    "blocks": len(blocks),
+                    "dropped_tokens_count": len(dropped_tokens),
+                    "warnings_count": len(warnings),
+                },
+                "dropped_tokens": dropped_tokens,
+                "warnings": warnings,
             },
         )
         write_group_json_artifact(result=page_result, out_file=out_file)

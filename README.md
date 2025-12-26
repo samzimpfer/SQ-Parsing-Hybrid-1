@@ -85,6 +85,14 @@ Outputs:
 - Per-page grouping JSON under `artifacts/grouping/<doc_id>/page_###.group.json`
 - Grouping doc ledger at `--out-doc` (repo-root-relative `pages[].group_out_relpath`)
 
+Optional flags (advanced):
+- `--confidence-floor <0..1>`: drop tokens below this floor (threshold only)
+- `--keep-whitespace-tokens`: keep whitespace-only tokens (default drops them)
+- `--no-bbox-repair`: disable deterministic bbox repair (default repairs swapped endpoints and drops zero-area boxes)
+- `--line-y-tol-k`, `--min-line-y-tol-px`: line grouping tolerance controls
+- `--block-gap-k`, `--min-block-gap-px`, `--block-overlap-threshold`: block grouping controls
+- `--omit-text-fields`: set `line.text` and `block.text` to empty strings deterministically
+
 Notes:
 - Single-page PDFs are treated as documents with one page; there is **no** separate single-page mode.
 
