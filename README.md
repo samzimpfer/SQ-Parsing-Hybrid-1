@@ -5,17 +5,17 @@ Deterministic, auditable extraction pipeline for heterogeneous engineering drawi
 This repo is governed by the architecture docs in `docs/architecture/` and follows a **strict staged pipeline**:
 - **Stage 0 - Document normalization (PDF -> images, deterministic, no OCR)**
 - **Stage 1 — OCR (perception only)**: detect text tokens + bounding boxes + confidence (no correction, no inference)
-- **Stage 2 — Structural grouping (deterministic)**: spatial clustering into regions (no semantic content interpretation)
+- **Stage 2 — Structural grouping (deterministic)**: token → line → block primitives (no semantic interpretation)
 - **Stage 3 — Interpretation (text-only LLM)**: map provided evidence into a schema with explicit nulls (LLM never sees images)
 - **Stage 4 — Validation (optional)**: compare passes and null on disagreement
 
-Only **Stage 1 (OCR)** is implemented here currently.
+Stages **0–2** are implemented here currently.
 
 ---
 
 ## Data access contract (important)
 
-Per `docs/architecture/08_DATA_RULES_AND_ACCESS.MD`:
+Per `docs/architecture/08_DATA_RULES_AND_ACCESS.md`:
 - Raw drawings are external to the repo.
 - The system must **not** assume their location.
 - **No module may hardcode paths or read environment variables directly.**
@@ -41,7 +41,7 @@ Stage 0 (PDF normalization) is implemented (see `src/normalize_pdf/`).
 
 The full pipeline is not wired end-to-end in this repo yet. For now, you can run **Stage 1 (OCR)** to generate an auditable JSON artifact that downstream stages will consume later.
 
-Stages 2–4 are not yet implemented.
+Stages 3–4 are not yet implemented.
 
 ---
 
@@ -120,7 +120,30 @@ The OCR output is a stable, machine-readable JSON with:
 
 ---
 
-## Implementation notes (Stage 1 only)
+## Run Stage 2 (Structural Grouping)
+
+Stage 2 groups Stage 1 OCR tokens into deterministic **lines** and **blocks** (and may emit conservative geometry-only regions).
+Prerequisite: install the package editable (see Stage 1 install section).
+
+Example:
+
+```bash
+python3 -m grouping.cli \
+  --input "artifacts/ocr/example_page_1.ocr.json" \
+  --output "artifacts/grouping/example_page_1.grouped.json"
+```
+
+### Output format
+
+The grouped artifact contains per-page:
+- `lines[]` (ordered `token_ids` + `line_bbox`)
+- `blocks[]` (ordered `line_ids` + `block_bbox`)
+- optional `regions` (geometry-only, conservative)
+- `meta` with deterministic config + counts
+
+---
+
+## Implementation notes
 
 - OCR module code lives in `src/ocr/`
 - Primary API for pipeline integration: `ocr.module.run_ocr_on_image_relpath(config, image_relpath)`
