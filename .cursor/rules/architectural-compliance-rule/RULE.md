@@ -2,7 +2,7 @@
 alwaysApply: true
 ---
 
-Architectural Compliance Rule
+## Architectural Compliance Rule
 
 This codebase is governed by the documents in `/docs/architecture`.
 
@@ -40,4 +40,34 @@ If a request appears to violate these rules or the documents in /docs/architectu
 - Stop and wait for direction
 
 You are an implementer operating under architectural law, not a designer improvising solutions.
+
+---
+
+## Artifact Hygiene and Test Isolation Rule
+
+All test, debug, scratch, or exploratory outputs MUST be isolated under:
+
+  artifacts/test/
+
+Rules:
+- No test or experimental outputs may be written directly into:
+    - artifacts/ocr/
+    - artifacts/grouping/
+    - artifacts/normalized/
+    - or any other production artifact directory
+- Test directories MUST NOT be interleaved with production outputs
+  (e.g. artifacts/grouping/doc_test_abc is forbidden)
+
+If a test requires temporary files:
+- They must be created under artifacts/test/
+- OR explicitly deleted before completion
+
+Cursor must:
+- Redirect test outputs into artifacts/test/ when generating test code
+- Remove any temporary test artifacts it creates outside artifacts/test/
+- Treat leftover test artifacts in production directories as a violation
+
+If a request would cause test artifacts to pollute production directories,
+Cursor must stop and request clarification.
+
 
