@@ -22,11 +22,73 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2].resolve()
 
 
+_GROUPING_ALGORITHM = "lines_blocks"
 _GROUPING_VERSION = "lines_blocks_v1"
 
 
 def _stable_json(x: Any) -> str:
     return json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _params_dict(cfg: GroupingConfigDoc) -> dict[str, Any]:
+    return {
+        "confidence_floor": cfg.confidence_floor,
+        "drop_whitespace_tokens": cfg.drop_whitespace_tokens,
+        "repair_bboxes": cfg.repair_bboxes,
+        "line_y_tol_k": cfg.line_y_tol_k,
+        "min_line_y_tol_px": cfg.min_line_y_tol_px,
+        "block_gap_k": cfg.block_gap_k,
+        "min_block_gap_px": cfg.min_block_gap_px,
+        "block_overlap_threshold": cfg.block_overlap_threshold,
+        "include_text_fields": cfg.include_text_fields,
+        "emit_regions": cfg.emit_regions,
+    }
+
+
+def _zero_derived(cfg: GroupingConfigDoc) -> dict[str, Any]:
+    # Deterministic neutral values for failure/no-signal cases.
+    return {
+        "median_token_height_px": 0,
+        "line_y_tol_px": 0,
+        "refined_bins": 0,
+        "median_line_height_px": 0,
+        "median_line_gap_px": 0,
+        "gap_threshold_px": 0,
+        # Keep configured threshold visible even on failures.
+        "overlap_threshold": float(cfg.block_overlap_threshold),
+    }
+
+
+def _page_meta(
+    *,
+    cfg: GroupingConfigDoc,
+    derived: dict[str, Any],
+    tokens_in: int,
+    tokens_used: int,
+    lines: int,
+    blocks: int,
+    dropped_tokens: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    # Ensure schema consistency across success/failure paths.
+    return {
+        "stage": 2,
+        "mode": "page",
+        "algorithm": _GROUPING_ALGORITHM,
+        "version": _GROUPING_VERSION,
+        "params": _params_dict(cfg),
+        "derived": dict(derived),
+        "counts": {
+            "tokens_in": int(tokens_in),
+            "tokens_used": int(tokens_used),
+            "lines": int(lines),
+            "blocks": int(blocks),
+            "dropped_tokens_count": int(len(dropped_tokens)),
+            "warnings_count": int(len(warnings)),
+        },
+        "dropped_tokens": list(dropped_tokens),
+        "warnings": list(warnings),
+    }
 
 
 def _median_int(values: list[int]) -> int:
@@ -148,7 +210,12 @@ def group_lines_into_blocks(
     """
 
     if not lines:
-        return [], {"median_line_height_px": 1, "median_line_gap_px": 0, "gap_threshold_px": 2}
+        return [], {
+            "median_line_height_px": 0,
+            "median_line_gap_px": 0,
+            "gap_threshold_px": 0,
+            "overlap_threshold": float(cfg.block_overlap_threshold),
+        }
 
     heights = [max(1, l.bbox.y1 - l.bbox.y0) for l in lines]
     med_h = _median_int(heights)
@@ -232,6 +299,7 @@ def _preprocess_tokens(
     warnings: list[dict[str, Any]] = []
     used: list[GroupTokenRef] = []
 
+    warned_bbox_repair: set[str] = set()
     for t in tokens:
         if cfg.drop_whitespace_tokens and t.text.strip() == "":
             dropped.append({"token_id": t.token_id, "reason": "WHITESPACE"})
@@ -245,22 +313,24 @@ def _preprocess_tokens(
         if cfg.repair_bboxes:
             repaired = _repair_bbox(bbox=bbox)
             if repaired != bbox:
-                warnings.append(
-                    {
-                        "code": "GROUP_BBOX_REPAIRED",
-                        "message": "Token bbox endpoints were swapped deterministically",
-                        "detail": {
-                            "token_id": t.token_id,
-                            "before": {"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1},
-                            "after": {
-                                "x0": repaired.x0,
-                                "y0": repaired.y0,
-                                "x1": repaired.x1,
-                                "y1": repaired.y1,
+                if t.token_id not in warned_bbox_repair:
+                    warned_bbox_repair.add(t.token_id)
+                    warnings.append(
+                        {
+                            "code": "GROUP_BBOX_REPAIRED",
+                            "message": "Token bbox endpoints were swapped deterministically",
+                            "detail": {
+                                "token_id": t.token_id,
+                                "before": {"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1},
+                                "after": {
+                                    "x0": repaired.x0,
+                                    "y0": repaired.y0,
+                                    "x1": repaired.x1,
+                                    "y1": repaired.y1,
+                                },
                             },
-                        },
-                    }
-                )
+                        }
+                    )
             bbox = repaired
 
         if _bbox_area(bbox) <= 0:
@@ -312,7 +382,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"ocr_doc_ledger": str(ledger_file), "repo_root": str(repo_root)},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     out_dir_abs = out_dir
@@ -336,7 +406,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"out_dir": str(out_dir_abs), "repo_root": str(repo_root)},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     if not ledger_file.exists():
@@ -352,7 +422,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"ocr_doc_ledger": ledger_rel},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     try:
@@ -370,7 +440,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"ocr_doc_ledger": ledger_rel, "error": repr(e)},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     doc_id = payload.get("doc_id")
@@ -388,7 +458,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"ocr_doc_ledger": ledger_rel},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     # Strict validation of pages[]: refuse entire run if any entry invalid.
@@ -440,7 +510,7 @@ def run_group_on_ocr_doc_ledger(
                     detail={"invalid_count": len(invalid), "invalid_examples": invalid[:3]},
                 )
             ],
-            meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+            meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
         )
 
     out_doc_abs: Path | None = None
@@ -465,7 +535,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"out_doc_manifest": str(out_doc_abs), "repo_root": str(repo_root)},
                     )
                 ],
-                meta={"stage": 2, "mode": "document", "version": _GROUPING_VERSION},
+                meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
             )
 
     normalized_pages = list(pages_in)
@@ -482,6 +552,16 @@ def run_group_on_ocr_doc_ledger(
         try:
             ocr_file.relative_to(repo_root)
         except Exception:
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -499,7 +579,7 @@ def run_group_on_ocr_doc_ledger(
                         },
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -514,6 +594,16 @@ def run_group_on_ocr_doc_ledger(
             continue
 
         if not ocr_file.exists():
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -527,7 +617,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath, "resolved": str(ocr_file)},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -544,6 +634,16 @@ def run_group_on_ocr_doc_ledger(
         try:
             ocr_payload = json.loads(ocr_file.read_text(encoding="utf-8"))
         except Exception as e:
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -557,7 +657,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath, "error": repr(e)},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -574,6 +674,16 @@ def run_group_on_ocr_doc_ledger(
         # Extract tokens from the Stage 1 per-page OCR artifact by matching the ledger page_num.
         pages = ocr_payload.get("pages")
         if not isinstance(pages, list):
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -587,7 +697,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -616,6 +726,16 @@ def run_group_on_ocr_doc_ledger(
                     if isinstance(pe, dict) and isinstance(pe.get("page_num"), int)
                 ]
             )
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -629,7 +749,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ledger_page_num": page_num, "available_page_nums": available},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -644,6 +764,16 @@ def run_group_on_ocr_doc_ledger(
             continue
 
         if len(matching_pages) > 1:
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -657,7 +787,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ledger_page_num": page_num, "match_count": len(matching_pages)},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -673,6 +803,16 @@ def run_group_on_ocr_doc_ledger(
 
         tokens_raw = matching_pages[0].get("tokens")
         if not isinstance(tokens_raw, list):
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=0,
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -686,7 +826,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath, "ledger_page_num": page_num},
                     )
                 ],
-                meta={"stage": 2, "mode": "page", "version": _GROUPING_VERSION},
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -729,6 +869,16 @@ def run_group_on_ocr_doc_ledger(
             token_refs.append(GroupTokenRef(token_id=token_id, text=text, bbox=bbox, confidence=conf))
 
         if bad_token:
+            meta = _page_meta(
+                cfg=cfg,
+                derived=_zero_derived(cfg),
+                tokens_in=len(token_refs),
+                tokens_used=0,
+                lines=0,
+                blocks=0,
+                dropped_tokens=[],
+                warnings=[],
+            )
             page_result = GroupPageResult(
                 ok=False,
                 page_num=page_num,
@@ -742,28 +892,7 @@ def run_group_on_ocr_doc_ledger(
                         detail={"ocr_out_relpath": ocr_out_relpath},
                     )
                 ],
-                meta={
-                    "stage": 2,
-                    "mode": "page",
-                    "algorithm": "lines_blocks_v1",
-                    "version": _GROUPING_VERSION,
-                    "params": {
-                        "confidence_floor": cfg.confidence_floor,
-                        "drop_whitespace_tokens": cfg.drop_whitespace_tokens,
-                        "repair_bboxes": cfg.repair_bboxes,
-                        "line_y_tol_k": cfg.line_y_tol_k,
-                        "min_line_y_tol_px": cfg.min_line_y_tol_px,
-                        "block_gap_k": cfg.block_gap_k,
-                        "min_block_gap_px": cfg.min_block_gap_px,
-                        "block_overlap_threshold": cfg.block_overlap_threshold,
-                        "include_text_fields": cfg.include_text_fields,
-                        "emit_regions": cfg.emit_regions,
-                    },
-                    "derived": {},
-                    "counts": {"tokens_in": len(token_refs), "tokens_used": 0, "lines": 0, "blocks": 0, "dropped_tokens_count": 0, "warnings_count": 0},
-                    "dropped_tokens": [],
-                    "warnings": [],
-                },
+                meta=meta,
             )
             write_group_json_artifact(result=page_result, out_file=out_file)
             page_refs.append(
@@ -778,8 +907,26 @@ def run_group_on_ocr_doc_ledger(
             continue
 
         tokens_used, dropped_tokens, warnings = _preprocess_tokens(tokens=token_refs, cfg=cfg)
-        lines, line_meta = group_tokens_into_lines(tokens=tokens_used, page_num=page_num, cfg=cfg)
-        blocks, block_meta = group_lines_into_blocks(lines=lines, page_num=page_num, cfg=cfg)
+
+        if len(tokens_used) == 0:
+            lines = []
+            blocks = []
+            derived = _zero_derived(cfg)
+        else:
+            lines, line_meta = group_tokens_into_lines(tokens=tokens_used, page_num=page_num, cfg=cfg)
+            blocks, block_meta = group_lines_into_blocks(lines=lines, page_num=page_num, cfg=cfg)
+            derived = {**_zero_derived(cfg), **line_meta, **block_meta}
+
+        meta = _page_meta(
+            cfg=cfg,
+            derived=derived,
+            tokens_in=len(token_refs),
+            tokens_used=len(tokens_used),
+            lines=len(lines),
+            blocks=len(blocks),
+            dropped_tokens=dropped_tokens,
+            warnings=warnings,
+        )
         page_result = GroupPageResult(
             ok=True,
             page_num=page_num,
@@ -787,35 +934,7 @@ def run_group_on_ocr_doc_ledger(
             lines=lines,
             blocks=blocks,
             errors=[],
-            meta={
-                "stage": 2,
-                "mode": "page",
-                "algorithm": "lines_blocks_v1",
-                "version": _GROUPING_VERSION,
-                "params": {
-                    "confidence_floor": cfg.confidence_floor,
-                    "drop_whitespace_tokens": cfg.drop_whitespace_tokens,
-                    "repair_bboxes": cfg.repair_bboxes,
-                    "line_y_tol_k": cfg.line_y_tol_k,
-                    "min_line_y_tol_px": cfg.min_line_y_tol_px,
-                    "block_gap_k": cfg.block_gap_k,
-                    "min_block_gap_px": cfg.min_block_gap_px,
-                    "block_overlap_threshold": cfg.block_overlap_threshold,
-                    "include_text_fields": cfg.include_text_fields,
-                    "emit_regions": cfg.emit_regions,
-                },
-                "derived": {**line_meta, **block_meta},
-                "counts": {
-                    "tokens_in": len(token_refs),
-                    "tokens_used": len(tokens_used),
-                    "lines": len(lines),
-                    "blocks": len(blocks),
-                    "dropped_tokens_count": len(dropped_tokens),
-                    "warnings_count": len(warnings),
-                },
-                "dropped_tokens": dropped_tokens,
-                "warnings": warnings,
-            },
+            meta=meta,
         )
         write_group_json_artifact(result=page_result, out_file=out_file)
         page_refs.append(
@@ -845,7 +964,7 @@ def run_group_on_ocr_doc_ledger(
         source_ocr_doc_ledger_relpath=ledger_rel,
         pages=page_refs,
         errors=doc_errors,
-        meta={"stage": 2, "mode": "document", "algorithm": "lines_blocks_v1", "version": _GROUPING_VERSION},
+        meta={"stage": 2, "mode": "document", "algorithm": _GROUPING_ALGORITHM, "version": _GROUPING_VERSION},
     )
 
     if out_doc_abs is not None:

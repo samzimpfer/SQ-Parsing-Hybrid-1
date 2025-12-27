@@ -142,6 +142,20 @@ class TestGroupingDocTokenPreprocessing(unittest.TestCase):
 
         # Dropped token metadata and warnings should be present and deterministic.
         meta = payload["meta"]
+        self.assertEqual(
+            set(meta.keys()),
+            {
+                "stage",
+                "mode",
+                "algorithm",
+                "version",
+                "params",
+                "derived",
+                "counts",
+                "dropped_tokens",
+                "warnings",
+            },
+        )
         dropped = meta["dropped_tokens"]
         reasons = {(d["token_id"], d["reason"]) for d in dropped}
         self.assertIn(("p001_t000000", "WHITESPACE"), reasons)
